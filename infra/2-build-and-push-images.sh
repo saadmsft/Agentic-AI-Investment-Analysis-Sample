@@ -18,6 +18,11 @@ TAG="latest"
 BUILD_API="false"
 BUILD_WEB="false"
 BUILD_ALL="true"
+# Default build mode: 'docker' builds locally and pushes (works from the
+# zero-trust jumpbox since it resolves the private ACR via VNet). Use --acr
+# to submit to ACR Tasks — note that against a private ACR this requires a
+# VNet-enabled dedicated agent pool (Premium feature).
+BUILD_MODE="docker"
 
 # Function to show usage
 usage() {
@@ -30,6 +35,8 @@ usage() {
     echo "  -t, --tag             Image tag (default: latest)"
     echo "  --api                 Build API app image. If specified, only API image will be built."
     echo "  --web                 Build web app image. If specified, only web image will be built."
+    echo "  --docker              Use local Docker + docker push (legacy path; requires public ACR)"
+    echo "  --acr                 Use 'az acr build' / ACR Tasks (default; works with private ACR)"
     echo "  -h, --help            Show this help message"
     echo ""
     echo "Examples:"
@@ -58,6 +65,14 @@ while [[ $# -gt 0 ]]; do
         --web)
              BUILD_WEB="true"
              BUILD_ALL="false"
+            shift 1
+            ;;
+        --docker)
+            BUILD_MODE="docker"
+            shift 1
+            ;;
+        --acr)
+            BUILD_MODE="acr"
             shift 1
             ;;
         -h|--help)
@@ -100,10 +115,12 @@ echo -e "${BLUE}📁 Moving to Project Root: $PROJECT_ROOT${NC}"
 # Change to project root
 cd "$PROJECT_ROOT"
 
-# Check if Docker is running
-if ! docker info > /dev/null 2>&1; then
-    echo -e "${RED}❌ Docker is not running. Please start Docker first.${NC}"
-    exit 1
+# Check if Docker is running (only required in docker mode)
+if [ "$BUILD_MODE" == "docker" ]; then
+    if ! docker info > /dev/null 2>&1; then
+        echo -e "${RED}❌ Docker is not running. Please start Docker first (or use default --acr mode).${NC}"
+        exit 1
+    fi
 fi
 
 #Check if npm is installed
@@ -128,16 +145,18 @@ echo ""
 echo -e "${YELLOW}📋 Current Azure subscription:${NC}"
 az account show --output table
 
-# Login to Azure Container Registry
-echo ""
-echo -e "${BLUE}🔐 Logging in to Azure Container Registry...${NC}"
-az acr login --name "${REGISTRY%%.*}"
-if [ $? -ne 0 ]; then
-    echo -e "${RED}❌ Failed to login to Azure Container Registry${NC}"
-    exit 1
+# Login to Azure Container Registry (docker path only)
+if [ "$BUILD_MODE" == "docker" ]; then
+    echo ""
+    echo -e "${BLUE}🔐 Logging in to Azure Container Registry...${NC}"
+    az acr login --name "${REGISTRY%%.*}"
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}❌ Failed to login to Azure Container Registry${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✅ Successfully logged in to ACR${NC}"
+    echo ""
 fi
-echo -e "${GREEN}✅ Successfully logged in to ACR${NC}"
-echo ""
 
 # Get Resource Group of the ACR
 RESOURCE_GROUP=$(az acr show --name "${REGISTRY%%.*}" --query "resourceGroup" -o tsv)
@@ -148,26 +167,41 @@ build_and_push() {
     local name=$1
     local dockerfile=$2
     local context=$3
-    local full_image_name="$REGISTRY/ai-invest-$name:$TAG"
-    
-    echo -e "${YELLOW}📦 Building $name...${NC}"
+    local image_ref="ai-invest-$name:$TAG"
+    local full_image_name="$REGISTRY/$image_ref"
+
+    echo -e "${YELLOW}📦 Building $name (mode=$BUILD_MODE)...${NC}"
     echo -e "${YELLOW}📁  Using docker file: $dockerfile${NC}"
     echo -e "${YELLOW}📁  Context: $context${NC}"
     echo -e "${YELLOW}🏷️  Tagging image as $full_image_name${NC}"
 
-    if docker buildx build --platform linux/amd64 -t "$full_image_name" -f "$dockerfile" "$context"; then
-        echo -e "${GREEN}✅ Successfully built $full_image_name${NC}"
-        
-        echo -e "${YELLOW}📤 Pushing $name to registry...${NC}"
-        if docker push "$full_image_name"; then
-            echo -e "${GREEN}✅ Successfully pushed $full_image_name${NC}"
+    if [ "$BUILD_MODE" == "acr" ]; then
+        if az acr build \
+            --registry "${REGISTRY%%.*}" \
+            --image "$image_ref" \
+            --platform linux/amd64 \
+            --file "$dockerfile" \
+            "$context"; then
+            echo -e "${GREEN}✅ Successfully built and pushed $full_image_name via ACR Tasks${NC}"
         else
-            echo -e "${RED}❌ Failed to push $name${NC}"
+            echo -e "${RED}❌ Failed to build/push $name via ACR Tasks${NC}"
             return 1
         fi
     else
-        echo -e "${RED}❌ Failed to build $name${NC}"
-        return 1
+        if docker buildx build --platform linux/amd64 -t "$full_image_name" -f "$dockerfile" "$context"; then
+            echo -e "${GREEN}✅ Successfully built $full_image_name${NC}"
+
+            echo -e "${YELLOW}📤 Pushing $name to registry...${NC}"
+            if docker push "$full_image_name"; then
+                echo -e "${GREEN}✅ Successfully pushed $full_image_name${NC}"
+            else
+                echo -e "${RED}❌ Failed to push $name${NC}"
+                return 1
+            fi
+        else
+            echo -e "${RED}❌ Failed to build $name${NC}"
+            return 1
+        fi
     fi
     printf -- '-%.0s' {1..100}
     echo ""

@@ -9,7 +9,20 @@ azure-storage-blob==12.26.0
 azure-cosmos==4.9.0
 
 # Microsoft Agent Framework
-agent-framework
+# Pinned to b260106: last beta with the pre-1.0 API surface used by this
+# sample (AgentRunResponse, ExecutorInvokedEvent, AgentRunEvent,
+# GroupChatBuilder, ChatMessage, AgentThread, handler). b260114+ and
+# 1.0.0+ refactored these into WorkflowEvent factories + AgentResponse.
+# All subpackages pinned to matching versions because the meta package
+# has loose deps and would otherwise pull core 1.1.0 and break imports.
+agent-framework==1.0.0b260106
+agent-framework-core==1.0.0b260106
+agent-framework-azure-ai==1.0.0b260106
+agent-framework-a2a==1.0.0b260106
+agent-framework-copilotstudio==1.0.0b260106
+agent-framework-devui==1.0.0b260106
+agent-framework-mem0==1.0.0b260106
+agent-framework-redis==1.0.0b260106
 
 # Authentication & Security
 # python-jose[cryptography]==3.3.0

@@ -19,6 +19,10 @@ AIFOUNDRY_LOCATION="swedencentral"
 NAME_PREFIX="aiinvest"
 ENVIRONMENT="dev"
 DEBUG="false"
+IS_PRIVATE="true"
+DEPLOY_JUMPBOX="true"
+SSH_KEY_FILE=""
+BASTION_SKU="Standard"
 
 # Function to show usage
 usage() {
@@ -32,6 +36,10 @@ usage() {
     echo "  -p, --name-prefix          Resource name prefix (default: aiinvest)"
     echo "  -e, --environment          Environment name (default: dev)"
     echo "  -a, --ai-foundry-location  AI Foundry location (default: swedencentral)"
+    echo "  --public                   Deploy the legacy public topology (isPrivate=false)"
+    echo "  --no-jumpbox               Skip jumpbox/Bastion deployment when private"
+    echo "  --ssh-key-file <path>      Path to SSH public key for the jumpbox (default: ~/.ssh/id_rsa.pub)"
+    echo "  --bastion-sku <sku>        Bastion SKU: Basic or Standard (default: Standard)"
     echo "  -d, --debug                Enable debug logging"
     echo "  -h, --help                 Show this help message"
     echo ""
@@ -62,6 +70,23 @@ while [[ $# -gt 0 ]]; do
             ;;
         -a|--ai-foundry-location)
             AIFOUNDRY_LOCATION="$2"
+            shift 2
+            ;;
+        --public)
+            IS_PRIVATE="false"
+            DEPLOY_JUMPBOX="false"
+            shift
+            ;;
+        --no-jumpbox)
+            DEPLOY_JUMPBOX="false"
+            shift
+            ;;
+        --ssh-key-file)
+            SSH_KEY_FILE="$2"
+            shift 2
+            ;;
+        --bastion-sku)
+            BASTION_SKU="$2"
             shift 2
             ;;
         -d|--debug)
@@ -139,6 +164,22 @@ fi
 echo -e "${BLUE}🏗️ Deploying Azure infrastructure...${NC}"
 DEPLOYMENT_NAME="ai-invest-sample-$(date +%s)"
 
+# Resolve SSH public key (required when deploying the jumpbox)
+JUMPBOX_PUBKEY=""
+if [ "$IS_PRIVATE" == "true" ] && [ "$DEPLOY_JUMPBOX" == "true" ]; then
+    if [ -z "$SSH_KEY_FILE" ]; then
+        SSH_KEY_FILE="$HOME/.ssh/id_rsa.pub"
+    fi
+    if [ ! -f "$SSH_KEY_FILE" ]; then
+        echo -e "${RED}❌ SSH public key not found at $SSH_KEY_FILE.${NC}"
+        echo -e "${YELLOW}   Generate one with 'ssh-keygen -t rsa -b 4096' or pass --ssh-key-file <path>.${NC}"
+        echo -e "${YELLOW}   Alternatively, re-run with --no-jumpbox or --public to skip.${NC}"
+        exit 1
+    fi
+    JUMPBOX_PUBKEY=$(cat "$SSH_KEY_FILE")
+    echo -e "${GREEN}✅ Using SSH public key: $SSH_KEY_FILE${NC}"
+fi
+
 optional_args=()
 
 if [ "$DEBUG" == "true" ]; then
@@ -153,6 +194,10 @@ az deployment group create \
         environment="$ENVIRONMENT" \
         location="$LOCATION" \
         aiFoundryLocation="$AIFOUNDRY_LOCATION" \
+        isPrivate="$IS_PRIVATE" \
+        deployJumpbox="$DEPLOY_JUMPBOX" \
+        bastionSku="$BASTION_SKU" \
+        jumpboxAdminPublicKey="$JUMPBOX_PUBKEY" \
     --name "$DEPLOYMENT_NAME" \
     --output table ${optional_args[@]}
 
@@ -193,10 +238,22 @@ fi
 echo ""
 echo -e "${GREEN}🎉 Azure infrastructure deployment completed!${NC}"
 echo ""
-echo -e "${BLUE}Next Steps:${NC}"
-echo "1. Build and push your Docker images to the Container Registry:"
-echo "   ./infra/2-build-and-push-images.sh -r $ACR_LOGIN_SERVER"
-echo ""
-echo "2. Deploy your applications using pushed images:"
-echo "   ./infra/3-deploy-apps.sh -g $RESOURCE_GROUP"
+if [ "$IS_PRIVATE" == "true" ]; then
+  echo -e "${YELLOW}⚠️  Zero-trust mode: ACR and Container Apps are now private.${NC}"
+  echo -e "${YELLOW}    Scripts 2 and 3 must be run from inside the VNet (use the jumpbox).${NC}"
+  echo -e "${BLUE}Next Steps:${NC}"
+  echo "1. Connect to the jumpbox via Azure Bastion:"
+  echo "   ./infra/0-connect-jumpbox.sh -g $RESOURCE_GROUP"
+  echo ""
+  echo "2. On the jumpbox: clone the repo, then run:"
+  echo "   ./infra/2-build-and-push-images.sh -r $ACR_LOGIN_SERVER"
+  echo "   ./infra/3-deploy-apps.sh -g $RESOURCE_GROUP"
+else
+  echo -e "${BLUE}Next Steps:${NC}"
+  echo "1. Build and push your Docker images to the Container Registry:"
+  echo "   ./infra/2-build-and-push-images.sh -r $ACR_LOGIN_SERVER"
+  echo ""
+  echo "2. Deploy your applications using pushed images:"
+  echo "   ./infra/3-deploy-apps.sh -g $RESOURCE_GROUP"
+fi
 echo ""

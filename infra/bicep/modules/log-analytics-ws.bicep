@@ -10,6 +10,9 @@ param roleAssignedManagedIdentityPrincipalIds string[]
 @description('Tags for resources')
 param tags object = {}
 
+@description('When true, disables public ingestion/query + local auth (access via AMPLS).')
+param isPrivate bool = false
+
 // Use Azure Verified Module for Log Analytics Workspace
 module logAnalytics 'br:mcr.microsoft.com/bicep/avm/res/operational-insights/workspace:0.12.0' = {
   params: {
@@ -18,6 +21,11 @@ module logAnalytics 'br:mcr.microsoft.com/bicep/avm/res/operational-insights/wor
     tags: tags
     skuName: 'PerGB2018'
     dataRetention: 30
+    publicNetworkAccessForIngestion: isPrivate ? 'Disabled' : 'Enabled'
+    publicNetworkAccessForQuery: isPrivate ? 'Disabled' : 'Enabled'
+    features: {
+      disableLocalAuth: isPrivate
+    }
     roleAssignments:[
       for principalId in roleAssignedManagedIdentityPrincipalIds: {
         principalId: principalId

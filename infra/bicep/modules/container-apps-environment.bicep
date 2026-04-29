@@ -17,6 +17,12 @@ param userAssignedResourceIds string[]
 @description('Tags for resources')
 param tags object = {}
 
+@description('When true, makes the ACA environment internal (VNet-integrated, no public ingress).')
+param isPrivate bool = false
+
+@description('ACA infrastructure subnet id (required when isPrivate=true). Must be /23 or larger, delegated to Microsoft.App/environments.')
+param infrastructureSubnetId string = ''
+
 
 // Use Azure Verified Module for Container Apps Environment
 module containerAppsEnvironment 'br:mcr.microsoft.com/bicep/avm/res/app/managed-environment:0.11.3' = {
@@ -39,9 +45,11 @@ module containerAppsEnvironment 'br:mcr.microsoft.com/bicep/avm/res/app/managed-
         workloadProfileType: 'Consumption'
       }
     ]
-    platformReservedCidr: '172.17.17.0/24'
-    platformReservedDnsIP: '172.17.17.17'
-    publicNetworkAccess: 'Enabled'
+    infrastructureSubnetResourceId: isPrivate ? infrastructureSubnetId : ''
+    internal: isPrivate
+    platformReservedCidr: isPrivate ? '' : '172.17.17.0/24'
+    platformReservedDnsIP: isPrivate ? '' : '172.17.17.17'
+    publicNetworkAccess: isPrivate ? 'Disabled' : 'Enabled'
     managedIdentities: {
       systemAssigned: true
       userAssignedResourceIds: userAssignedResourceIds

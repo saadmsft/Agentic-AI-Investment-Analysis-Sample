@@ -10,23 +10,26 @@ param containerRegistryServer string
 @description('Container image')
 param containerImage string
 
-@description('CORS allowed origins')
-param allowOrigins string[] = ['*']
-
-@description('CPU cores for the container')
-param cpuCores int = 1
-
-@description('Memory in GB for the container')
-param memoryInGB string = '2Gi'
+@description('When true, deploys the web app with public access disabled and a private endpoint.')
+param isPrivate bool = true
 
 @description('Backend API URL for frontend configuration')
 param backendApiUrl string = ''
 
-@description('Container Apps Environment resource name where the container apps will be deployed')
-param containerAppsEnvironment string
+@description('App Service Plan resource ID')
+param appServicePlanId string
 
-@description('User Assigned Identity Resource Name used as identity for the api app')
+@description('User Assigned Identity name (existing in same RG).')
 param userAssignedIdentityName string
+
+@description('Subnet ID for regional VNet integration (snet-appsvc).')
+param vnetIntegrationSubnetId string
+
+@description('Subnet ID for the private endpoint (snet-pe).')
+param privateEndpointSubnetId string
+
+@description('Private DNS zone ID for privatelink.azurewebsites.net')
+param appServicePrivateDnsZoneId string
 
 @description('Tags for resources')
 param tags object = {
@@ -37,7 +40,11 @@ param tags object = {
 
 var appName = '${namePrefix}-web-${environment}'
 
-// Environment variables for the frontend
+resource userAssignedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' existing = {
+  scope: resourceGroup()
+  name: userAssignedIdentityName
+}
+
 var environmentVariables = !empty(backendApiUrl) ? [
   {
     name: 'VITE_API_BASE_URL'
@@ -45,84 +52,27 @@ var environmentVariables = !empty(backendApiUrl) ? [
   }
 ] : []
 
-// Fetch existing User Assigned Identity
-resource userAssignedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' existing = {
-  scope: resourceGroup()
-  name: userAssignedIdentityName
-}
-
-resource containerAppsEnvironmentResource 'Microsoft.App/managedEnvironments@2023-05-01' existing = {
-  name: containerAppsEnvironment
-  scope: resourceGroup()
-}
-
-// Use Azure Verified Module for Container App (Web App)
-module webApp 'br:mcr.microsoft.com/bicep/avm/res/app/container-app:0.19.0' = {
+module webApp '../../../infra/bicep/modules/web-app-container.bicep' = {
   name: 'webAppDeployment'
   params: {
     name: appName
-    location: containerAppsEnvironmentResource.location
+    location: resourceGroup().location
     tags: tags
-    environmentResourceId: containerAppsEnvironmentResource.id
-    corsPolicy: {
-      allowCredentials: true
-      allowedOrigins: allowOrigins
-      allowedMethods: ['*']
-      allowedHeaders: ['*']
-    }
-    ingressAllowInsecure: false
-    containers: [
-      {
-        name: appName
-        image: containerImage
-        resources: {
-          cpu: cpuCores
-          memory: memoryInGB
-        }
-        env: environmentVariables
-        probes: [
-          {
-            type: 'Liveness'
-            httpGet: {
-              path: '/'
-              port: 8080
-            }
-            initialDelaySeconds: 5
-            periodSeconds: 30
-          }
-        ]
-      }
-    ]
-    ingressExternal: true
-    ingressTargetPort: 8080
-    managedIdentities: {
-      systemAssigned: false
-      userAssignedResourceIds: [ userAssignedIdentity.id ]
-    }
-    registries: [
-      {
-        server: containerRegistryServer
-        identity: userAssignedIdentity.id
-      }
-    ]
-    scaleSettings: {
-      minReplicas: 1
-      maxReplicas: 1
-      rules: [ 
-        {
-          name: 'http-scaler'
-          http: {
-            metadata: {
-              concurrentRequests: '10'
-            }
-          }
-        }
-      ]
-    }
+    appServicePlanId: appServicePlanId
+    containerImage: containerImage
+    containerRegistryServer: containerRegistryServer
+    userAssignedIdentityResourceId: userAssignedIdentity.id
+    userAssignedIdentityClientId: userAssignedIdentity.properties.clientId
+    targetPort: 8080
+    healthCheckPath: '/'
+    isPrivate: isPrivate
+    vnetIntegrationSubnetId: vnetIntegrationSubnetId
+    privateEndpointSubnetId: privateEndpointSubnetId
+    appServicePrivateDnsZoneId: appServicePrivateDnsZoneId
+    appSettings: environmentVariables
   }
 }
 
-
 output containerAppName string = webApp.outputs.name
-output containerAppUrl string = webApp.outputs.fqdn
-output containerAppId string = webApp.outputs.resourceId
+output containerAppUrl string = webApp.outputs.defaultHostName
+output containerAppId string = webApp.outputs.id

@@ -19,6 +19,15 @@ param zoneRedundant bool = false
 @description('Optional: Tags for resources')
 param tags object = {}
 
+@description('When true, disables public network access and deploys a private endpoint.')
+param isPrivate bool = false
+
+@description('Subnet resource id for the private endpoint (required when isPrivate=true)')
+param privateEndpointSubnetId string = ''
+
+@description('Private DNS zone resource id for Cosmos SQL API (required when isPrivate=true)')
+param cosmosSqlPrivateDnsZoneId string = ''
+
 
 // Use Azure Verified Module for Cosmos DB
 module cosmosDb 'br:mcr.microsoft.com/bicep/avm/res/document-db/database-account:0.16.0' = {
@@ -33,7 +42,7 @@ module cosmosDb 'br:mcr.microsoft.com/bicep/avm/res/document-db/database-account
     disableLocalAuthentication: true
     backupPolicyContinuousTier: 'Continuous7Days'
     networkRestrictions: {
-      publicNetworkAccess: 'Enabled'
+      publicNetworkAccess: isPrivate ? 'Disabled' : 'Enabled'
     }
     zoneRedundant: zoneRedundant
     sqlDatabases: [
@@ -63,6 +72,24 @@ module cosmosDb 'br:mcr.microsoft.com/bicep/avm/res/document-db/database-account
         ]
       }
     ]
+  }
+}
+
+resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' existing = {
+  name: cosmosAccountName
+  dependsOn: [ cosmosDb ]
+}
+
+module pe 'private-endpoint.bicep' = if (isPrivate) {
+  name: 'cosmos-pe-${uniqueString(cosmosAccountName)}'
+  params: {
+    name: '${cosmosAccountName}-pe'
+    location: location
+    subnetId: privateEndpointSubnetId
+    targetResourceId: cosmosAccount.id
+    groupIds: [ 'Sql' ]
+    privateDnsZoneIds: empty(cosmosSqlPrivateDnsZoneId) ? [] : [ cosmosSqlPrivateDnsZoneId ]
+    tags: tags
   }
 }
 

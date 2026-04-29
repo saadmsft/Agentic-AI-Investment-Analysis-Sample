@@ -5,16 +5,15 @@ param namePrefix string = 'aiinvest'
 @description('Environment name (dev, staging, prod)')
 param environment string = 'dev'
 
-@description('Container Apps Environment resource name where the container apps will be deployed')
-param containerAppsEnvironmentName string
+@description('App Service Plan resource ID')
+param appServicePlanId string
 
-@description('Container Registry Server')
+@description('Container Registry login server, e.g. myacr.azurecr.io')
 param containerRegistryServer string
 
 @description('Container image for the backend app')
 param containerImage string
 
-// API env vars related parameters
 @description('Cosmos DB account endpoint')
 param cosmosAccountEndpoint string
 
@@ -24,20 +23,23 @@ param cosmosDbName string
 @description('Storage Account name')
 param storageAccountName string
 
-
-// API App related parameters
-
 @description('CORS allowed origins')
 param allowOrigins string[] = ['*']
 
-@description('CPU cores for the container')
-param cpuCores int = 1
+@description('When true, deploys the web app with public access disabled and a private endpoint.')
+param isPrivate bool = true
 
-@description('Memory in GB for the container')
-param memoryInGB string = '2Gi'
-
-@description('User Assigned Identity Resource Name used as identity for the api app')
+@description('User Assigned Identity name (existing in same RG).')
 param userAssignedIdentityName string
+
+@description('Subnet ID for regional VNet integration (snet-appsvc).')
+param vnetIntegrationSubnetId string
+
+@description('Subnet ID for the private endpoint (snet-pe).')
+param privateEndpointSubnetId string
+
+@description('Private DNS zone ID for privatelink.azurewebsites.net')
+param appServicePrivateDnsZoneId string
 
 @description('Additional environment variables')
 param additionalEnvironmentVariables array = []
@@ -47,7 +49,11 @@ param tags object = {}
 
 var appName = '${namePrefix}-api-${environment}'
 
-// Prepare environment variables
+resource userAssignedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' existing = {
+  scope: resourceGroup()
+  name: userAssignedIdentityName
+}
+
 var environmentVariables = concat([
   {
     name: 'COSMOS_DB_ENDPOINT'
@@ -58,101 +64,44 @@ var environmentVariables = concat([
     value: cosmosDbName
   }
   {
-    name :'AZURE_STORAGE_ACCOUNT_NAME'
+    name: 'AZURE_STORAGE_ACCOUNT_NAME'
     value: storageAccountName
   }
   {
-    name :'AZURE_OPENAI_ENDPOINT'
+    name: 'AZURE_OPENAI_ENDPOINT'
     value: ''
   }
   {
-    name :'AZURE_OPENAI_DEPLOYMENT_NAME'
+    name: 'AZURE_OPENAI_DEPLOYMENT_NAME'
     value: ''
   }
   {
-    name: 'AZURE_CLIENT_ID'
-    value: userAssignedIdentity.properties.clientId
+    name: 'ALLOW_ORIGINS'
+    value: join(allowOrigins, ',')
   }
 ], additionalEnvironmentVariables)
 
-
-// Fetch existing User Assigned Identity
-resource userAssignedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' existing = {
-  scope: resourceGroup()
-  name: userAssignedIdentityName
-}
-
-// Fetch existing Container Apps Environment
-resource containerAppsEnvironmentResource 'Microsoft.App/managedEnvironments@2023-05-01' existing = {
-  name: containerAppsEnvironmentName
-  scope: resourceGroup()
-}
-
-// Use Azure Verified Module for Container App
-module apiApp 'br:mcr.microsoft.com/bicep/avm/res/app/container-app:0.19.0' = {
+module apiApp '../../../infra/bicep/modules/web-app-container.bicep' = {
   name: 'apiAppDeployment'
   params: {
     name: appName
-    location: containerAppsEnvironmentResource.location
+    location: resourceGroup().location
     tags: tags
-    environmentResourceId: containerAppsEnvironmentResource.id
-    corsPolicy: {
-      allowCredentials: true
-      allowedOrigins: allowOrigins
-      allowedMethods: ['*']
-      allowedHeaders: ['*']
-    }
-    ingressAllowInsecure: false
-    containers: [
-      {
-        name: appName
-        image: containerImage
-        resources: {
-          cpu: cpuCores
-          memory: memoryInGB
-        }
-        env: environmentVariables
-        probes: [
-          {
-            type: 'Liveness'
-            httpGet: {
-              path: '/health'
-              port: 8090
-            }
-            initialDelaySeconds: 5
-            periodSeconds: 60
-          }
-        ]
-      }
-    ]
-    ingressExternal: true
-    ingressTargetPort: 8090
-    managedIdentities: {
-      userAssignedResourceIds: [ userAssignedIdentity.id ]
-    }
-    registries: [
-      {
-        server: containerRegistryServer
-        identity: userAssignedIdentity.id
-      }
-    ]
-    scaleSettings: {
-      minReplicas: 1
-      maxReplicas: 1
-      rules: [ 
-        {
-          name: 'http-scaler'
-          http: {
-            metadata: {
-              concurrentRequests: '10'
-            }
-          }
-        }
-      ]
-    }
+    appServicePlanId: appServicePlanId
+    containerImage: containerImage
+    containerRegistryServer: containerRegistryServer
+    userAssignedIdentityResourceId: userAssignedIdentity.id
+    userAssignedIdentityClientId: userAssignedIdentity.properties.clientId
+    targetPort: 8090
+    healthCheckPath: '/health'
+    isPrivate: isPrivate
+    vnetIntegrationSubnetId: vnetIntegrationSubnetId
+    privateEndpointSubnetId: privateEndpointSubnetId
+    appServicePrivateDnsZoneId: appServicePrivateDnsZoneId
+    appSettings: environmentVariables
   }
 }
 
 output containerAppName string = apiApp.outputs.name
-output containerAppUrl string = apiApp.outputs.fqdn
-output containerAppId string = apiApp.outputs.resourceId
+output containerAppUrl string = apiApp.outputs.defaultHostName
+output containerAppId string = apiApp.outputs.id

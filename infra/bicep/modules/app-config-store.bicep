@@ -13,6 +13,15 @@ param configurationKeyValues array = []
 @description('Tags for resources')
 param tags object = {}
 
+@description('When true, disables public network access + local auth and deploys a private endpoint.')
+param isPrivate bool = false
+
+@description('Subnet resource id for the private endpoint (required when isPrivate=true)')
+param privateEndpointSubnetId string = ''
+
+@description('Private DNS zone resource id for App Configuration (required when isPrivate=true)')
+param appConfigPrivateDnsZoneId string = ''
+
 // Create list of role assignments for the managed identities
 var roleAssignments = [
     for principalId in roleAssignedManagedIdentityPrincipalIds: {
@@ -40,7 +49,8 @@ module configurationStore 'br/public:avm/res/app-configuration/configuration-sto
     tags: tags
     sku: 'Standard'
     createMode: 'Default'
-    disableLocalAuth: false
+    disableLocalAuth: isPrivate
+    publicNetworkAccess: isPrivate ? 'Disabled' : 'Enabled'
     enablePurgeProtection: false
     keyValues: [
       for config in configurationKeyValues: {
@@ -57,3 +67,21 @@ module configurationStore 'br/public:avm/res/app-configuration/configuration-sto
 output endpoint string = configurationStore.outputs.endpoint
 output resourceId string = configurationStore.outputs.resourceId
 output name string = configurationStore.outputs.name
+
+resource acsRef 'Microsoft.AppConfiguration/configurationStores@2023-03-01' existing = {
+  name: appConfigStoreName
+  dependsOn: [ configurationStore ]
+}
+
+module pe 'private-endpoint.bicep' = if (isPrivate) {
+  name: 'acs-pe-${uniqueString(appConfigStoreName)}'
+  params: {
+    name: '${appConfigStoreName}-pe'
+    location: location
+    subnetId: privateEndpointSubnetId
+    targetResourceId: acsRef.id
+    groupIds: [ 'configurationStores' ]
+    privateDnsZoneIds: empty(appConfigPrivateDnsZoneId) ? [] : [ appConfigPrivateDnsZoneId ]
+    tags: tags
+  }
+}

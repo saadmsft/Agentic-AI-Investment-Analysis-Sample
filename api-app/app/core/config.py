@@ -1,7 +1,8 @@
-from typing import Optional
+from typing import Optional, Annotated
 from dotenv import load_dotenv, find_dotenv
 from functools import lru_cache
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict, NoDecode
 
 
 class Settings(BaseSettings):
@@ -22,9 +23,18 @@ class Settings(BaseSettings):
     
     # CORS Settings
     ALLOW_CREDENTIALS: bool = True
-    ALLOW_ORIGINS: list[str] = ["*"]
-    ALLOW_METHODS: list[str] = ["*"]
-    ALLOW_HEADERS: list[str] = ["*"]
+    ALLOW_ORIGINS: Annotated[list[str], NoDecode] = ["*"]
+    ALLOW_METHODS: Annotated[list[str], NoDecode] = ["*"]
+    ALLOW_HEADERS: Annotated[list[str], NoDecode] = ["*"]
+
+    @field_validator("ALLOW_ORIGINS", "ALLOW_METHODS", "ALLOW_HEADERS", mode="before")
+    @classmethod
+    def _split_csv(cls, value):
+        # Accept a comma-separated string from env vars (simpler for deploy-time
+        # injection) in addition to the default JSON list form.
+        if isinstance(value, str) and not value.strip().startswith("["):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
 
     # Azure Cosmos DB Settings
     COSMOS_DB_ENDPOINT: str = ""

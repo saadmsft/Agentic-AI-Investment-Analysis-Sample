@@ -1,0 +1,102 @@
+flowchart LR
+    classDef pub fill:#ffe0e0,stroke:#cc0000,color:#000,stroke-width:2px
+    classDef vnet fill:#e8f0ff,stroke:#1f4e9d,color:#000,stroke-width:1.5px
+    classDef pe fill:#fff4cc,stroke:#b58900,color:#000,stroke-width:1.5px
+    classDef app fill:#d6f5d6,stroke:#2e7d32,color:#000,stroke-width:1.5px
+    classDef data fill:#f0e6ff,stroke:#6a1b9a,color:#000,stroke-width:1.5px
+    classDef obs fill:#e0f7fa,stroke:#006064,color:#000,stroke-width:1.5px
+    classDef id  fill:#fde7f3,stroke:#ad1457,color:#000,stroke-width:1.5px
+    classDef dns fill:#f5f5f5,stroke:#616161,color:#000,stroke-width:1.5px
+
+    Op([Operator / Developer]):::pub
+    Internet([Public internet]):::pub
+
+    subgraph RG["Azure Resource Group"]
+      direction LR
+      subgraph VNet["VNet · 10.50.0.0/16"]
+        direction TB
+        subgraph S_Bastion["AzureBastionSubnet /26"]
+          Bastion["Azure Bastion · Standard<br/>(only public IP)"]:::pub
+        end
+        subgraph S_Jump["snet-jumpbox /27"]
+          Jump["Linux jumpbox VM<br/>no public IP · UAMI"]:::vnet
+        end
+        subgraph S_Aca["snet-aca-infra /23 · delegated"]
+          ACA["Container Apps Environment<br/>workload profiles · internal=true"]:::app
+          APIApp["API container app<br/>internal :8090"]:::app
+          WebApp["Web container app<br/>internal :8080"]:::app
+        end
+        subgraph S_Pe["snet-pe /26 · Private Endpoints"]
+          PE_Acr(("PE<br/>ACR")):::pe
+          PE_Cos(("PE<br/>Cosmos")):::pe
+          PE_Blob(("PE<br/>Blob")):::pe
+          PE_Ai(("PE<br/>AI Foundry")):::pe
+          PE_Ampls(("PE<br/>AMPLS")):::pe
+          PE_Acs(("PE<br/>App Config")):::pe
+        end
+        subgraph S_Build["snet-build · reserved"]
+          Build["ACR Tasks / build agents"]:::vnet
+        end
+        subgraph S_Mgmt["snet-mgmt · reserved"]
+          Runner["Self-hosted CI/CD runner"]:::vnet
+        end
+      end
+
+      subgraph PaaS["Private PaaS · publicNetworkAccess=Disabled"]
+        ACR["Azure Container Registry<br/>Premium · admin disabled"]:::data
+        Cosmos["Cosmos DB<br/>disableLocalAuth=true"]:::data
+        Storage["Storage Account<br/>allowSharedKeyAccess=false"]:::data
+        AI["Azure AI Foundry<br/>+ OpenAI gpt-4.1-mini"]:::data
+        AppConfig["App Configuration<br/>optional"]:::data
+      end
+
+      subgraph Obs["Observability via AMPLS"]
+        LA["Log Analytics<br/>ingest/query private"]:::obs
+        AppI["Application Insights<br/>disableLocalAuth=true"]:::obs
+        AMPLS["Azure Monitor<br/>Private Link Scope"]:::obs
+      end
+
+      subgraph IdGroup["Identity"]
+        UAMI["User-Assigned Managed Identity<br/>AcrPull/Push · Storage Blob ·<br/>Cosmos Data Contributor · Azure AI User"]:::id
+      end
+
+      PDNS[("Private DNS Zones<br/>documents · blob · azurecr<br/>openai · cognitiveservices · services.ai<br/>azconfig · monitor · oms · ods · agentsvc")]:::dns
+    end
+
+    Op -- "HTTPS 443" --> Bastion
+    Bastion -- "SSH tunnel" --> Jump
+    Jump -- "docker push / az deploy" --> PE_Acr
+    Jump -- "browser tunnel" --> WebApp
+
+    WebApp -- "HTTP internal" --> APIApp
+    APIApp -- "AAD token" --> PE_Cos
+    APIApp -- "AAD token" --> PE_Blob
+    APIApp -- "AAD token" --> PE_Ai
+    APIApp -- "optional" --> PE_Acs
+
+    PE_Acr -. "private link" .-> ACR
+    PE_Cos -. "private link" .-> Cosmos
+    PE_Blob -. "private link" .-> Storage
+    PE_Ai -. "private link" .-> AI
+    PE_Acs -. "private link" .-> AppConfig
+    PE_Ampls -. "private link" .-> AMPLS
+    AMPLS --- LA
+    AMPLS --- AppI
+    APIApp -. "telemetry" .-> PE_Ampls
+    WebApp -. "telemetry" .-> PE_Ampls
+    ACA -. "logs" .-> PE_Ampls
+
+    Jump -. "DNS" .-> PDNS
+    APIApp -. "DNS" .-> PDNS
+    WebApp -. "DNS" .-> PDNS
+
+    UAMI -. "federated" .-> APIApp
+    UAMI -. "federated" .-> WebApp
+    UAMI -. "attached" .-> Jump
+
+    Internet -- "blocked" --> ACR
+    Internet -- "blocked" --> Cosmos
+    Internet -- "blocked" --> Storage
+    Internet -- "blocked" --> AI
+    Internet -- "blocked" --> ACA
+    Internet == "allowed" ==> Bastion

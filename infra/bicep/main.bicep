@@ -10,6 +10,29 @@ param environment string = 'dev'
 param location string = resourceGroup().location
 
 // ################################################
+// Zero-trust / networking parameters
+
+@description('When true, deploys the zero-trust topology: VNet + private endpoints + internal ACA + disabled public network access on all PaaS resources.')
+param isPrivate bool = true
+
+@description('When true (and isPrivate=true), also deploys a Linux jumpbox + Azure Bastion for operator access.')
+param deployJumpbox bool = true
+
+@description('VNet address space used when isPrivate=true')
+param vnetAddressPrefix string = '10.50.0.0/16'
+
+@description('Admin username for the jumpbox VM')
+param jumpboxAdminUsername string = 'azureuser'
+
+@description('SSH public key for the jumpbox VM (required when deployJumpbox=true)')
+@secure()
+param jumpboxAdminPublicKey string = ''
+
+@description('Azure Bastion SKU. Standard required for native-client tunneling.')
+@allowed([ 'Basic', 'Standard' ])
+param bastionSku string = 'Standard'
+
+// ################################################
 // Application specific parameters
 
 @description('Cosmos DB database name')
@@ -37,9 +60,34 @@ var tags = {
   Project: 'ai-investment-analysis-sample'
 }
 
-// User Assigned Identity for Container Apps to access other resources
+var shortHash = substring(uniqueString(resourceGroup().id, deployment().name), 0, 8)
+
+// ################################################
+// Networking (VNet + Private DNS) — deployed first when isPrivate=true
+
+module network 'modules/network.bicep' = if (isPrivate) {
+  name: 'networkDeployment.${shortHash}'
+  params: {
+    vnetName: toLower('${namePrefix}-vnet-${uniqueString(resourceGroupId)}')
+    vnetAddressPrefix: vnetAddressPrefix
+    location: location
+    tags: tags
+  }
+}
+
+module privateDns 'modules/private-dns.bicep' = if (isPrivate) {
+  name: 'privateDnsDeployment.${shortHash}'
+  params: {
+    vnetId: network.outputs.vnetId
+    tags: tags
+  }
+}
+
+// ################################################
+// Identity
+
 module userAssignedIdentity 'modules/user-assigned-identity.bicep' = {
-  name: 'userAssignedIdentityDeployment.${substring(uniqueString(resourceGroup().id, deployment().name), 0, 8)}'
+  name: 'userAssignedIdentityDeployment.${shortHash}'
   params: {
     userAssignedIdentityName: toLower('${namePrefix}-uai-${uniqueString(resourceGroupId)}')
     location: location
@@ -47,44 +95,73 @@ module userAssignedIdentity 'modules/user-assigned-identity.bicep' = {
   }
 }
 
-// Log Analytics Workspace
+// ################################################
+// Log Analytics + Application Insights
+
 module logAnalytics 'modules/log-analytics-ws.bicep' = {
-  name: 'logAnalyticsDeployment.${substring(uniqueString(resourceGroup().id, deployment().name), 0, 8)}'
+  name: 'logAnalyticsDeployment.${shortHash}'
   params: {
     logAnalyticsWorkspaceName: toLower('${namePrefix}-law-${uniqueString(resourceGroupId)}')
     roleAssignedManagedIdentityPrincipalIds: [userAssignedIdentity.outputs.principalId]
     location: location
     tags: tags
+    isPrivate: isPrivate
   }
 }
 
-// Application Insights
 module appInsights 'modules/app-insights.bicep' = {
-  name: 'appInsightsDeployment.${substring(uniqueString(resourceGroup().id, deployment().name), 0, 8)}'
+  name: 'appInsightsDeployment.${shortHash}'
   params: {
     appInsightsName: toLower('${namePrefix}-appi-${uniqueString(resourceGroupId)}')
     location: location
     logAnalyticsResourceId: logAnalytics.outputs.resourceId
-    roleAssignedManagedIdentityPrincipalIds: [userAssignedIdentity.outputs.principalId]
+    tags: tags
+    isPrivate: isPrivate
+  }
+}
+
+// Azure Monitor Private Link Scope — binds LA + AppI so telemetry flows over VNet.
+module ampls 'modules/ampls.bicep' = if (isPrivate) {
+  name: 'amplsDeployment.${shortHash}'
+  params: {
+    name: toLower('${namePrefix}-ampls-${uniqueString(resourceGroupId)}')
+    logAnalyticsResourceId: logAnalytics.outputs.resourceId
+    appInsightsResourceId: appInsights.outputs.resourceId
+    privateEndpointSubnetId: network.outputs.peSubnetId
+    privateEndpointLocation: location
+    privateDnsZoneIds: [
+      privateDns.outputs.monitorZoneId
+      privateDns.outputs.omsZoneId
+      privateDns.outputs.odsZoneId
+      privateDns.outputs.agentsvcZoneId
+      privateDns.outputs.blobFixedZoneId
+    ]
     tags: tags
   }
 }
 
-// Storage Account (with Blob Container and Queue)
+// ################################################
+// Storage
+
 module storage 'modules/storage.bicep' = {
-  name: 'storageAccountDeployment.${substring(uniqueString(resourceGroup().id, deployment().name), 0, 8)}'
+  name: 'storageAccountDeployment.${shortHash}'
   params: {
     storageAccountName: length('${namePrefix}sta${uniqueString(resourceGroupId)}') > 24 ? substring(toLower('${namePrefix}sta${uniqueString(resourceGroupId)}'), 0, 24) : toLower('${namePrefix}sta${uniqueString(resourceGroupId)}')
     location: location
     docsContainerName: docsContainerName
     roleAssignedManagedIdentityPrincipalIds: [userAssignedIdentity.outputs.principalId]
     tags: tags
+    isPrivate: isPrivate
+    privateEndpointSubnetId: isPrivate ? network.outputs.peSubnetId : ''
+    blobPrivateDnsZoneId: isPrivate ? privateDns.outputs.blobZoneStorageSuffixId : ''
   }
 }
 
+// ################################################
 // Cosmos DB
+
 module cosmosDb 'modules/cosmos-db.bicep' = {
-  name: 'cosmosDbDeployment.${substring(uniqueString(resourceGroup().id, deployment().name), 0, 8)}'
+  name: 'cosmosDbDeployment.${shortHash}'
   params: {
     location: location
     cosmosAccountName: toLower('${namePrefix}-cosmosdb-${uniqueString(resourceGroup().id)}')
@@ -93,161 +170,108 @@ module cosmosDb 'modules/cosmos-db.bicep' = {
     cosmosDBDataContributorPrincipalIds: [userAssignedIdentity.outputs.principalId, deployer().objectId]
     zoneRedundant: environment == 'prod' ? true : false
     tags: tags
+    isPrivate: isPrivate
+    privateEndpointSubnetId: isPrivate ? network.outputs.peSubnetId : ''
+    cosmosSqlPrivateDnsZoneId: isPrivate ? privateDns.outputs.cosmosSqlZoneId : ''
   }
 }
 
-// // App Configuration Store
-// module appConfigStore 'modules/app-config-store.bicep' = {
-//   name: 'appConfigStoreDeployment.${substring(uniqueString(resourceGroup().id, deployment().name), 0, 8)}'
-//   params: {
-//     appConfigStoreName: toLower('${namePrefix}-acs-${uniqueString(resourceGroupId)}')
-//     location: location
-//     roleAssignedManagedIdentityPrincipalIds: [userAssignedIdentity.outputs.principalId]
-//     configurationKeyValues: [
-//       // api app specific key vaules, uses the prefix: 'doc-proc.api.<key>'
-//       {
-//         contentType: 'text/plain'
-//         name: 'doc-proc.api.DEBUG'
-//         value: 'true'
-//       }
-//       {
-//         contentType: 'text/plain'
-//         name: 'doc-proc.api.BLOB_STORAGE_ACCOUNT_NAME'
-//         value: storage.outputs.name
-//       }
-//       {
-//         contentType: 'text/plain'
-//         name: 'doc-proc.api.BLOB_STORAGE_CONTAINER_NAME'
-//         value: 'vaults'
-//       }
-//       // worker app specific key values, uses the prefix: 'doc-proc.worker.<key>'
-//       {
-//         contentType: 'text/plain'
-//         name: 'doc-proc.worker.DEBUG'
-//         value: 'true'
-//       }
-//       {
-//         contentType: 'text/plain'
-//         name: 'doc-proc.worker.DEBUG'
-//         value: 'true'
-//       }
-//       {
-//         contentType: 'text/plain'
-//         name: 'doc-proc.worker.WORKER_POOL_SIZE'
-//         value: '2'
-//       }
-//       {
-//         contentType: 'text/plain'
-//         name: 'doc-proc.worker.WORKER_SHUTDOWN_TIMEOUT'
-//         value: '30'
-//       }
-//       {
-//         contentType: 'text/plain'
-//         name: 'doc-proc.worker.WORKER_AUTO_RESTART'
-//         value: 'true'
-//       }
-//       {
-//         contentType: 'text/plain'
-//         name: 'doc-proc.worker.WORKER_HEALTH_CHECK_INTERVAL'
-//         value: '10'
-//       }
-//       // Crawler Worker specific key values, uses the prefix: 'doc-proc.crawler.<key>'
-//       {
-//         contentType: 'text/plain'
-//         name: 'doc-proc.crawler.DEBUG'
-//         value: 'true'
-//       }
-//       {
-//         contentType: 'text/plain'
-//         name: 'doc-proc.crawler.CRAWLER_MAX_WORKERS'
-//         value: '3'
-//       }
-//       {
-//         contentType: 'text/plain'
-//         name: 'doc-proc.crawler.CRAWLER_DISCOVERY_POLL_INTERVAL'
-//         value: '60' // in seconds
-//       }
-//       {
-//         contentType: 'text/plain'
-//         name: 'doc-proc.crawler.CRAWLER_LEASE_DURATION_MINUTES'
-//         value: '30' // in minutes
-//       }
-//       {
-//         contentType: 'text/plain'
-//         name: 'doc-proc.crawler.CRAWLER_LEASE_RENEWAL_INTERVAL_MINUTES'
-//         value: '15' // in minutes
-//       }
-//       // shared key values, uses the prefix: 'doc-proc.<key>'
-//       {
-//         contentType: 'text/plain'
-//         name: 'doc-proc.common.COSMOS_DB_ENDPOINT'
-//         value: cosmosDb.outputs.cosmosEndpoint
-//       }
-//       {
-//         contentType: 'text/plain'
-//         name: 'doc-proc.common.COSMOS_DB_NAME'
-//         value: cosmosDbName
-//       }
-//       {
-//         contentType: 'text/plain'
-//         name: 'doc-proc.common.STORAGE_ACCOUNT_WORKER_QUEUE_URL'
-//         value: storage.outputs.queueUrl
-//       }
-//       {
-//         contentType: 'text/plain'
-//         name: 'doc-proc.common.STORAGE_WORKER_QUEUE_NAME'
-//         value: storage.outputs.queueName
-//       }
-//       {
-//         contentType: 'text/plain'
-//         name: 'doc-proc.common.APPINSIGHTS_INSTRUMENTATIONKEY'
-//         value: appInsights.outputs.instrumentationKey
-//       }
-//       {
-//         contentType: 'text/plain'
-//         name: 'sentinel'
-//         value: '1'
-//       }
-      
-//     ]
-//     tags: tags
-//   }
-// }
-
+// ################################################
 // Container Registry
+
 module containerRegistry 'modules/container-registry.bicep' = {
-  name: 'containerRegistryDeployment.${substring(uniqueString(resourceGroup().id, deployment().name), 0, 8)}'
+  name: 'containerRegistryDeployment.${shortHash}'
   params: {
     containerRegistryName: toLower('${namePrefix}acr${uniqueString(resourceGroupId)}')
     location: location
     roleAssignedManagedIdentityPrincipalIds: [userAssignedIdentity.outputs.principalId]
     tags: tags
+    isPrivate: isPrivate
+    privateEndpointSubnetId: isPrivate ? network.outputs.peSubnetId : ''
+    acrPrivateDnsZoneId: isPrivate ? privateDns.outputs.acrZoneId : ''
   }
 }
 
-// Container Apps Environment (shared by all container apps)
-module containerAppsEnvironment 'modules/container-apps-environment.bicep' = {
-  name: 'containerAppsEnvironmentDeployment.${substring(uniqueString(resourceGroup().id, deployment().name), 0, 8)}'
+// ################################################
+// Compute host: App Service Plan (Linux) — replaces ACA env.
+// Web Apps for Containers are deployed by api-app/web-app templates and
+// are bound to this plan. Private endpoint + VNet integration are wired
+// per-app inside web-app-container.bicep.
+
+module appServicePlan 'modules/app-service-plan.bicep' = {
+  name: 'appServicePlanDeployment.${shortHash}'
   params: {
-    containerAppsEnvironmentName: toLower('${namePrefix}-containerenv-${uniqueString(resourceGroupId)}')
-    logAnalyticsWorkspaceId: logAnalytics.outputs.logAnalyticsWorkspaceId
-    logAnalyticsPrimarySharedKey: logAnalytics.outputs.primarySharedKey
-    userAssignedResourceIds: [userAssignedIdentity.outputs.resourceId]
+    name: toLower('${namePrefix}-asp-${uniqueString(resourceGroupId)}')
     location: location
     tags: tags
   }
 }
 
+// NOTE: ACA env module has been retired in favor of App Service.
+// modules/container-apps-environment.bicep is kept on disk for reference
+// but is no longer instantiated.
+
+// ################################################
 // AI Foundry
+
 module aiFoundry 'modules/ai-foundry.bicep' = {
-  name: 'aiFoundryDeployment.${substring(uniqueString(resourceGroup().id, deployment().name), 0, 8)}'
+  name: 'aiFoundryDeployment.${shortHash}'
   params: {
-    aiFoundryBaseName: substring(toLower(uniqueString('ai-${namePrefix}-${environment}-${resourceGroup().id}')), 0, 12) // AI Foundry base name has a max length of 12 characters
+    aiFoundryBaseName: substring(toLower(uniqueString('ai-${namePrefix}-${environment}-${resourceGroup().id}')), 0, 12)
     roleAssignedManagedIdentityPrincipalIds: [userAssignedIdentity.outputs.principalId]
     location: aiFoundryLocation
     tags: tags
+    isPrivate: isPrivate
+    openAiPrivateDnsZoneId: isPrivate ? privateDns.outputs.openAiZoneId : ''
+    cognitiveServicesPrivateDnsZoneId: isPrivate ? privateDns.outputs.cognitiveServicesZoneId : ''
+    aiServicesPrivateDnsZoneId: isPrivate ? privateDns.outputs.aiServicesZoneId : ''
   }
 }
+
+// ################################################
+// Operator access plane — Bastion + Jumpbox
+
+module bastion 'modules/bastion.bicep' = if (isPrivate && deployJumpbox) {
+  name: 'bastionDeployment.${shortHash}'
+  params: {
+    name: toLower('${namePrefix}-bastion-${uniqueString(resourceGroupId)}')
+    location: location
+    subnetId: network.outputs.bastionSubnetId
+    sku: bastionSku
+    tags: tags
+  }
+}
+
+module jumpbox 'modules/jumpbox.bicep' = if (isPrivate && deployJumpbox) {
+  name: 'jumpboxDeployment.${shortHash}'
+  params: {
+    name: toLower('${namePrefix}-jump-${uniqueString(resourceGroupId)}')
+    location: location
+    subnetId: network.outputs.jumpboxSubnetId
+    adminUsername: jumpboxAdminUsername
+    adminPublicKey: jumpboxAdminPublicKey
+    userAssignedIdentityId: userAssignedIdentity.outputs.resourceId
+    tags: tags
+  }
+}
+
+var uaiName = toLower('${namePrefix}-uai-${uniqueString(resourceGroupId)}')
+
+// Grant the jumpbox identity the roles needed to run scripts end-to-end.
+// UAMI already has AcrPull/AcrPush/AcrDelete + Storage + Cosmos data roles;
+// add Contributor scoped to the resource group so it can deploy container apps.
+resource jumpboxRgContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (isPrivate && deployJumpbox) {
+  name: guid(resourceGroup().id, uaiName, 'b24988ac-6180-42a0-ab88-20f7382dd24c')
+  scope: resourceGroup()
+  properties: {
+    principalId: userAssignedIdentity.outputs.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b24988ac-6180-42a0-ab88-20f7382dd24c') // Contributor
+  }
+}
+
+// ################################################
+// Outputs
 
 output userAssignedIdentityName string = userAssignedIdentity.outputs.name
 output userAssignedIdentityPrincipalId string = userAssignedIdentity.outputs.principalId
@@ -255,13 +279,18 @@ output userAssignedIdentityResourceId string = userAssignedIdentity.outputs.reso
 output userAssignedIdentityClientId string = userAssignedIdentity.outputs.clientId
 output containerRegistryName string = containerRegistry.outputs.name
 output containerRegistryLoginServer string = containerRegistry.outputs.loginServer
-output containerAppsEnvironmentId string = containerAppsEnvironment.outputs.resourceId
-output containerAppsEnvironmentName string = containerAppsEnvironment.outputs.name
+output appServicePlanId string = appServicePlan.outputs.id
+output appServicePlanName string = appServicePlan.outputs.name
+output appSvcSubnetId string = isPrivate ? network.outputs.appSvcSubnetId : ''
+output peSubnetId string = isPrivate ? network.outputs.peSubnetId : ''
+output appServicePrivateDnsZoneId string = isPrivate ? privateDns.outputs.appServiceZoneId : ''
 output storageAccountName string = storage.outputs.name
-// output appConfigStoreName string = appConfigStore.outputs.name
-// output appConfigStoreEndpoint string = appConfigStore.outputs.endpoint
 output cosmosAccountName string = cosmosDb.outputs.cosmosAccountName
 output cosmosEndpoint string = cosmosDb.outputs.cosmosEndpoint
 output cosmosDBName string = cosmosDb.outputs.cosmosDBName
 output aiProjectName string = aiFoundry.outputs.aiProjectName
 output aiServicesName string = aiFoundry.outputs.aiServicesName
+output isPrivate bool = isPrivate
+output vnetId string = isPrivate ? network.outputs.vnetId : ''
+output jumpboxName string = (isPrivate && deployJumpbox) ? jumpbox.outputs.vmName : ''
+output bastionName string = (isPrivate && deployJumpbox) ? bastion.outputs.bastionName : ''

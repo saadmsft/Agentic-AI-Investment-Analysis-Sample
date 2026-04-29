@@ -124,7 +124,57 @@ The application uses Server-Sent Events (SSE) for real-time updates:
 - **Historical Events**: New subscribers receive historical events before live updates
 - **Background Processing**: Analysis runs in FastAPI background tasks while streaming events
 
-## 📦 Prerequisites
+## � One-Click Azure Deployment
+
+Deploy the full Azure infrastructure (zero-trust topology by default — VNet, private endpoints, internal Container Apps, Cosmos DB, Storage, Azure AI Foundry, Key Vault, Container Registry, and an optional jumpbox + Azure Bastion) directly from the Azure Portal using the pre-built ARM template at [infra/bicep/main.json](infra/bicep/main.json):
+<p align="center">
+    <picture>
+    <img src="./_assets/zero-trust-architecture.png" alt="AI Investment Analysis - Private Zero-Trust Architecture" style="max-width:800px;width:100%" />
+    </picture>
+</p>
+
+<p align="center">
+    <picture>
+    <img src="./docs/diagrams/private_architecture.png" alt="AI Investment Analysis - Private Architecture" style="max-width:800px;width:100%" />
+    </picture>
+</p>
+
+> See [`_assets/ZERO_TRUST_ARCHITECTURE.md`](_assets/ZERO_TRUST_ARCHITECTURE.md) for a full breakdown of the topology above.
+
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FAzure-Samples%2FAgentic-AI-Investment-Analysis-Sample%2Fmain%2Finfra%2Fbicep%2Fmain.json)
+
+[![Visualize](https://raw.githubusercontent.com/Azure/azure-quickstart-templates/master/1-CONTRIBUTION-GUIDE/images/visualizebutton.svg?sanitize=true)](http://armviz.io/#/?load=https%3A%2F%2Fraw.githubusercontent.com%2FAzure-Samples%2FAgentic-AI-Investment-Analysis-Sample%2Fmain%2Finfra%2Fbicep%2Fmain.json)
+
+### Before you click
+
+1. **Create (or pick) a resource group** in your target subscription — the template deploys at resource-group scope.
+2. **Generate an SSH public key** if you keep the default `deployJumpbox=true`. Paste the contents of `~/.ssh/id_rsa.pub` (or any OpenSSH public key) into the `jumpboxAdminPublicKey` field. Leave it empty only if you set `deployJumpbox=false`.
+3. **Pick locations** that have capacity for Azure AI Foundry models (e.g. `swedencentral`, `eastus2`) for `aiFoundryLocation`.
+
+### Key parameters
+
+| Parameter | Default | Description |
+|---|---|---|
+| `namePrefix` | `invstdemo` | Prefix used for all resource names |
+| `environment` | `dev` | Environment tag (`dev`, `staging`, `prod`) |
+| `location` | resource group location | Region for most resources |
+| `aiFoundryLocation` | resource group location | Region for Azure AI Foundry / model deployment |
+| `isPrivate` | `true` | Deploy zero-trust topology (VNet + private endpoints + internal ACA). Set `false` for a public, demo-only topology. |
+| `deployJumpbox` | `true` | Deploy a Linux jumpbox + Azure Bastion for operator access (only when `isPrivate=true`) |
+| `jumpboxAdminPublicKey` | _(empty)_ | **Required when `deployJumpbox=true`** — your SSH public key |
+| `bastionSku` | `Standard` | `Basic` or `Standard` (Standard required for native-client tunneling) |
+| `vnetAddressPrefix` | `10.50.0.0/16` | VNet CIDR when `isPrivate=true` |
+
+> **Note:** The portal one-click flow provisions the Azure infrastructure only. After the deployment finishes, build and push the container images and roll out the apps with the helper scripts:
+>
+> ```bash
+> ./infra/2-build-and-push-images.sh -g <your-resource-group>
+> ./infra/3-deploy-apps.sh           -g <your-resource-group>
+> ```
+>
+> See [`infra/1-deploy-azure-infra.sh`](infra/1-deploy-azure-infra.sh) for the equivalent CLI-based deployment with all available flags, and [`_assets/ZERO_TRUST_ARCHITECTURE.md`](_assets/ZERO_TRUST_ARCHITECTURE.md) for the full network topology.
+
+## �📦 Prerequisites
 
 - **Python 3.11+** (3.13 recommended)
 - **Node.js 18+** and npm

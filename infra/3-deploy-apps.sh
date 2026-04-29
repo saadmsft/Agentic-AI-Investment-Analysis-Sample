@@ -160,7 +160,7 @@ get_deployment_outputs() {
     # Get the deployment name
     local deployment_name=$(az deployment group list \
         --resource-group "$resource_group" \
-        --query "[?contains(name, 'ai-invest-sample')].name | [0]" \
+        --query "[?contains(name, 'ai-invest-appsvc')].name | [0]" \
         --output tsv)
     
     if [ -z "$deployment_name" ]; then
@@ -214,14 +214,29 @@ else
     echo -e "${GREEN}✅ User Assigned Identity Name: $USER_ASSIGNED_IDENTITY_NAME${NC}"
 fi
 
-# Get Container Apps Environment ID from infrastructure deployment
-CONTAINER_APPS_ENV_NAME=$(get_output_property "containerAppsEnvironmentName")
-if [ -z "$CONTAINER_APPS_ENV_NAME" ]; then
-    echo -e "${RED}❌ Container Apps Environment not found after $MAX_RETRIES attempts. Please run deploy-azure-infra.sh first.${NC}"
+# Resolve UAMI client ID once (used to PATCH acrUserManagedIdentityID post-deploy
+# because the bicep ARM property is not always honored on first create).
+UAMI_CLIENT_ID=$(az identity show \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "$USER_ASSIGNED_IDENTITY_NAME" \
+    --query clientId -o tsv 2>/dev/null)
+SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+
+# Get App Service Plan + networking info from infrastructure deployment
+APP_SERVICE_PLAN_ID=$(get_output_property "appServicePlanId")
+if [ -z "$APP_SERVICE_PLAN_ID" ]; then
+    echo -e "${RED}❌ App Service Plan not found. Please run deploy-azure-infra.sh first.${NC}"
     exit 1
 else
-    echo -e "${GREEN}✅ Container Apps Environment Name: $CONTAINER_APPS_ENV_NAME${NC}"
+    echo -e "${GREEN}✅ App Service Plan: $APP_SERVICE_PLAN_ID${NC}"
 fi
+
+APPSVC_SUBNET_ID=$(get_output_property "appSvcSubnetId")
+PE_SUBNET_ID=$(get_output_property "peSubnetId")
+APPSVC_DNS_ZONE_ID=$(get_output_property "appServicePrivateDnsZoneId")
+echo -e "${GREEN}✅ VNet integration subnet: $APPSVC_SUBNET_ID${NC}"
+echo -e "${GREEN}✅ Private endpoint subnet: $PE_SUBNET_ID${NC}"
+echo -e "${GREEN}✅ App Service private DNS zone: $APPSVC_DNS_ZONE_ID${NC}"
 
 
 # Get Cosmos DB Endpoint from infrastructure deployment
@@ -291,10 +306,13 @@ if [ "$DEPLOY_ALL" == "true" ] || [ "$DEPLOY_API" == "true" ]; then
             --parameters \
                 environment="$ENVIRONMENT" \
                 namePrefix="$NAME_PREFIX" \
-                containerAppsEnvironmentName="$CONTAINER_APPS_ENV_NAME" \
+                appServicePlanId="$APP_SERVICE_PLAN_ID" \
                 containerRegistryServer="$REGISTRY" \
                 containerImage="$REGISTRY/ai-invest-api:$TAG" \
                 userAssignedIdentityName="$USER_ASSIGNED_IDENTITY_NAME" \
+                vnetIntegrationSubnetId="$APPSVC_SUBNET_ID" \
+                privateEndpointSubnetId="$PE_SUBNET_ID" \
+                appServicePrivateDnsZoneId="$APPSVC_DNS_ZONE_ID" \
                 cosmosAccountEndpoint="$COSMOS_DB_ENDPOINT" \
                 cosmosDbName="$COSMOS_DB_NAME" \
                 storageAccountName="$STORAGE_ACCOUNT_NAME" \
@@ -303,30 +321,37 @@ if [ "$DEPLOY_ALL" == "true" ] || [ "$DEPLOY_API" == "true" ]; then
 
             echo -e "${GREEN}✅ API App deployed successfully${NC}"
 
-            # Get the Container App name from the deployment outputs
+            # Get the Web App name from the deployment outputs
             API_APP_NAME=$(az deployment group show \
                 --resource-group "$RESOURCE_GROUP" \
                 --name "$API_DEPLOYMENT_NAME" \
                 --query "properties.outputs.containerAppName.value" \
                 --output tsv)
 
-            # Get the Container App FQDN
-            API_URL=$(az containerapp show \
+            # Get the Web App default hostname
+            API_URL=$(az webapp show \
                 --name "$API_APP_NAME" \
                 --resource-group "$RESOURCE_GROUP" \
-                --query "properties.configuration.ingress.fqdn" \
+                --query "defaultHostName" \
                 --output tsv)
 
-            # Force a new app revision to ensure the latest image is pulled
-            echo -e "${BLUE}Forcing a new revision to pull the latest image...${NC}"
-            az containerapp update \
+            # Force a redeploy of the container image (App Service caches by digest)
+            echo -e "${BLUE}Forcing the App Service to pull the latest image...${NC}"
+            az webapp config container set \
                 --name "${API_APP_NAME}" \
                 --resource-group "$RESOURCE_GROUP" \
-                --image "${REGISTRY}/ai-invest-api:${TAG}" \
-                --revision-suffix "$(date +%s)" \
-                --output none \
-                --no-wait
-            echo -e "${GREEN}✅ Updated Container App to pull latest image${NC}"
+                --container-image-name "${REGISTRY}/ai-invest-api:${TAG}" \
+                --output none
+            # Workaround: ensure acrUseManagedIdentityCreds + acrUserManagedIdentityID are set
+            # (bicep does not always persist these on initial create, causing 503 image-pull errors).
+            if [ -n "$UAMI_CLIENT_ID" ]; then
+                az rest --method PATCH \
+                    --url "https://management.azure.com/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Web/sites/${API_APP_NAME}/config/web?api-version=2023-12-01" \
+                    --body "{\"properties\":{\"acrUseManagedIdentityCreds\":true,\"acrUserManagedIdentityID\":\"${UAMI_CLIENT_ID}\"}}" \
+                    --output none 2>/dev/null || true
+            fi
+            az webapp restart --name "${API_APP_NAME}" --resource-group "$RESOURCE_GROUP" --output none
+            echo -e "${GREEN}✅ Updated Web App to pull latest image${NC}"
 
             if [ -n "$API_URL" ]; then
                 API_URL="https://$API_URL"
@@ -381,38 +406,46 @@ if [ "$DEPLOY_ALL" == "true" ] || [ "$DEPLOY_WEB" == "true" ]; then
                         environment="$ENVIRONMENT" \
                         containerImage="$REGISTRY/ai-invest-web:$TAG" \
                         backendApiUrl="$API_URL/api" \
-                        containerAppsEnvironment="$CONTAINER_APPS_ENV_NAME" \
+                        appServicePlanId="$APP_SERVICE_PLAN_ID" \
                         containerRegistryServer="$REGISTRY" \
                         userAssignedIdentityName="$USER_ASSIGNED_IDENTITY_NAME" \
+                        vnetIntegrationSubnetId="$APPSVC_SUBNET_ID" \
+                        privateEndpointSubnetId="$PE_SUBNET_ID" \
+                        appServicePrivateDnsZoneId="$APPSVC_DNS_ZONE_ID" \
             "${optional_args[@]}" \
             --output none; then
 
             echo -e "${GREEN}✅ Web App deployed successfully${NC}"
 
-            # Get the Container App name from the deployment outputs
+            # Get the Web App name from the deployment outputs
             WEB_APP_NAME=$(az deployment group show \
                 --resource-group "$RESOURCE_GROUP" \
                 --name "$WEB_DEPLOYMENT_NAME" \
                 --query "properties.outputs.containerAppName.value" \
                 --output tsv)
 
-            # Get Web App URL
-            WEB_URL=$(az containerapp show \
+            # Get the Web App default hostname
+            WEB_URL=$(az webapp show \
                 --name "${WEB_APP_NAME}" \
                 --resource-group "$RESOURCE_GROUP" \
-                --query "properties.configuration.ingress.fqdn" \
+                --query "defaultHostName" \
                 --output tsv 2>/dev/null)
 
-            # Force a new app revision to ensure the latest image is pulled
-            echo -e "${BLUE}Forcing a new revision to pull the latest image...${NC}"
-            az containerapp update \
+            # Force the App Service to pull the latest image
+            echo -e "${BLUE}Forcing the App Service to pull the latest image...${NC}"
+            az webapp config container set \
                 --name "${WEB_APP_NAME}" \
                 --resource-group "$RESOURCE_GROUP" \
-                --image "${REGISTRY}/ai-invest-web:${TAG}" \
-                --revision-suffix "$(date +%s)" \
-                --output none \
-                --no-wait
-            echo -e "${GREEN}✅ Updated Container App to pull latest image${NC}"
+                --container-image-name "${REGISTRY}/ai-invest-web:${TAG}" \
+                --output none
+            if [ -n "$UAMI_CLIENT_ID" ]; then
+                az rest --method PATCH \
+                    --url "https://management.azure.com/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Web/sites/${WEB_APP_NAME}/config/web?api-version=2023-12-01" \
+                    --body "{\"properties\":{\"acrUseManagedIdentityCreds\":true,\"acrUserManagedIdentityID\":\"${UAMI_CLIENT_ID}\"}}" \
+                    --output none 2>/dev/null || true
+            fi
+            az webapp restart --name "${WEB_APP_NAME}" --resource-group "$RESOURCE_GROUP" --output none
+            echo -e "${GREEN}✅ Updated Web App to pull latest image${NC}"
 
             if [ -n "$WEB_URL" ]; then
                 WEB_URL="https://$WEB_URL"
@@ -438,6 +471,22 @@ if [ "$DEPLOY_ALL" == "true" ] || [ "$DEPLOY_WEB" == "true" ]; then
 else
     echo -e "${YELLOW}⚠️ Skipping Web App deployment${NC}"
     echo ""
+fi
+
+######################################################################
+######################################################################
+## LOCK DOWN AI FOUNDRY / COGNITIVE SERVICES TO VNET ONLY
+## (Restrict the Foundry account so only the App Service VNet integration
+## subnet can call it. The AVM Foundry module does not expose networkAcls,
+## so we PATCH the account post-deploy. Idempotent.)
+
+AI_ACCOUNT=$(az cognitiveservices account list -g "$RESOURCE_GROUP" --query "[0].name" -o tsv 2>/dev/null)
+if [ -n "$AI_ACCOUNT" ] && [ -n "$APPSVC_SUBNET_ID" ]; then
+    echo -e "${BLUE}🔒 Locking AI Services account '$AI_ACCOUNT' to snet-appsvc only...${NC}"
+    az rest --method PATCH \
+        --url "https://management.azure.com/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.CognitiveServices/accounts/$AI_ACCOUNT?api-version=2024-10-01" \
+        --body "{\"properties\":{\"networkAcls\":{\"defaultAction\":\"Deny\",\"bypass\":\"AzureServices\",\"virtualNetworkRules\":[{\"id\":\"$APPSVC_SUBNET_ID\",\"ignoreMissingVnetServiceEndpoint\":false}],\"ipRules\":[]}}}" \
+        --output none 2>/dev/null || echo -e "${YELLOW}⚠️ Could not lock AI Services networkAcls (non-fatal).${NC}"
 fi
 
 ######################################################################

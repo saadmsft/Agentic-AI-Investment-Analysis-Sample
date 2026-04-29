@@ -92,7 +92,7 @@ The system uses a sophisticated multi-agent architecture:
 
 **Investment Analysis Workflow:**
 ```
-Data Preparation → [Financial Analyst, Risk Analyst, Market Analyst, Compliance Analyst] 
+Data Preparation → [Financial Analyst, Risk Analyst, Market Analyst, Compliance Analyst]
 → Analysis Aggregator → Investment Debate Executor → Summary Report Generator
 ```
 
@@ -153,17 +153,17 @@ Deploy the full Azure infrastructure (zero-trust topology by default — VNet, p
 
 ### Key parameters
 
-| Parameter | Default | Description |
-|---|---|---|
-| `namePrefix` | `invstdemo` | Prefix used for all resource names |
-| `environment` | `dev` | Environment tag (`dev`, `staging`, `prod`) |
-| `location` | resource group location | Region for most resources |
-| `aiFoundryLocation` | resource group location | Region for Azure AI Foundry / model deployment |
-| `isPrivate` | `true` | Deploy zero-trust topology (VNet + private endpoints + internal ACA). Set `false` for a public, demo-only topology. |
-| `deployJumpbox` | `true` | Deploy a Linux jumpbox + Azure Bastion for operator access (only when `isPrivate=true`) |
-| `jumpboxAdminPublicKey` | _(empty)_ | **Required when `deployJumpbox=true`** — your SSH public key |
-| `bastionSku` | `Standard` | `Basic` or `Standard` (Standard required for native-client tunneling) |
-| `vnetAddressPrefix` | `10.50.0.0/16` | VNet CIDR when `isPrivate=true` |
+| Parameter               | Default                 | Description                                                                                                         |
+| ----------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `namePrefix`            | `invstdemo`             | Prefix used for all resource names                                                                                  |
+| `environment`           | `dev`                   | Environment tag (`dev`, `staging`, `prod`)                                                                          |
+| `location`              | resource group location | Region for most resources                                                                                           |
+| `aiFoundryLocation`     | resource group location | Region for Azure AI Foundry / model deployment                                                                      |
+| `isPrivate`             | `true`                  | Deploy zero-trust topology (VNet + private endpoints + internal ACA). Set `false` for a public, demo-only topology. |
+| `deployJumpbox`         | `true`                  | Deploy a Linux jumpbox + Azure Bastion for operator access (only when `isPrivate=true`)                             |
+| `jumpboxAdminPublicKey` | _(empty)_               | **Required when `deployJumpbox=true`** — your SSH public key                                                        |
+| `bastionSku`            | `Standard`              | `Basic` or `Standard` (Standard required for native-client tunneling)                                               |
+| `vnetAddressPrefix`     | `10.50.0.0/16`          | VNet CIDR when `isPrivate=true`                                                                                     |
 
 > **Note:** The portal one-click flow provisions the Azure infrastructure only. After the deployment finishes, build and push the container images and roll out the apps with the helper scripts:
 >
@@ -275,8 +275,8 @@ npm run dev
 1. Create a Cosmos DB account with NoSQL API
 2. The application will automatically create the database and containers on first run
 3. Ensure your connection endpoint is in the `.env` file
-4. Ensure proper access permissions on Cosmos DB account: 
-   
+4. Ensure proper access permissions on Cosmos DB account:
+
    Follow the steps in this article: [Connect to Azure Cosmos DB for NoSQL using role-based access control and Microsoft Entra ID](https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/how-to-connect-role-based-access-control?pivots=azure-cli)
 
 **Blob Storage:**

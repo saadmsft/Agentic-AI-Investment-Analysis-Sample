@@ -174,6 +174,16 @@ Deploy the full Azure infrastructure (zero-trust topology by default — VNet, p
 >
 > See [`infra/1-deploy-azure-infra.sh`](infra/1-deploy-azure-infra.sh) for the equivalent CLI-based deployment with all available flags, and [`_assets/ZERO_TRUST_ARCHITECTURE.md`](_assets/ZERO_TRUST_ARCHITECTURE.md) for the full network topology.
 
+### 📘 Full private-deployment documentation
+
+The end-to-end reference for the zero-trust topology — every parameter, module, subnet, Private DNS zone, RBAC assignment, app setting, and operational runbook — lives in [`docs/PRIVATE_DEPLOYMENT.md`](docs/PRIVATE_DEPLOYMENT.md). Use it when you need to:
+
+- Customize VNet sizing, subnets, or NSG rules
+- Understand which roles are granted to the workload UAMI and the deployer
+- Switch between `isPrivate=true` (zero-trust) and `isPrivate=false` (public demo)
+- Operate the jumpbox + Azure Bastion access plane
+- Troubleshoot private-endpoint, DNS, or image-pull issues
+
 ## �📦 Prerequisites
 
 - **Python 3.11+** (3.13 recommended)

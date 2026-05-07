@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.42.1.51946",
-      "templateHash": "4960232274037771954"
+      "templateHash": "14153731485685723076"
     }
   },
   "parameters": {
@@ -43178,7 +43178,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.42.1.51946",
-              "templateHash": "16365167653907153569"
+              "templateHash": "5149576106587506965"
             }
           },
           "parameters": {
@@ -43290,7 +43290,7 @@
                   }
                 },
                 "osProfile": {
-                  "computerName": "[parameters('name')]",
+                  "computerName": "[take(replace(parameters('name'), '-', ''), 15)]",
                   "adminUsername": "[parameters('adminUsername')]",
                   "adminPassword": "[parameters('adminPassword')]",
                   "windowsConfiguration": {

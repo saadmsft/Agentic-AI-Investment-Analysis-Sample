@@ -118,7 +118,7 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-03-01' = {
       }
     }
     osProfile: {
-      computerName: name
+      computerName: take(replace(name, '-', ''), 15)
       adminUsername: adminUsername
       adminPassword: adminPassword
       windowsConfiguration: {

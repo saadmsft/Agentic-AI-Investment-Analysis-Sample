@@ -19,9 +19,9 @@ BUILD_API="false"
 BUILD_WEB="false"
 BUILD_ALL="true"
 # Default build mode: 'docker' builds locally and pushes (works from the
-# zero-trust jumpbox since it resolves the private ACR via VNet). Use --acr
-# to submit to ACR Tasks — note that against a private ACR this requires a
-# VNet-enabled dedicated agent pool (Premium feature).
+# zero-trust Windows jumpbox when Docker EE is installed and the private ACR
+# is reachable via VNet). Use --acr to submit to ACR Tasks — note that against
+# a private ACR this requires a VNet-enabled dedicated agent pool (Premium feature).
 BUILD_MODE="docker"
 
 # Function to show usage

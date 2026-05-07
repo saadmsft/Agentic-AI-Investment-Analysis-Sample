@@ -18,7 +18,7 @@ This guide documents **everything you need to deploy, operate, and customize the
 
 | Plane         | Components                                                                                               | Public exposure                |
 | ------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------ |
-| Operator      | Azure Bastion (Standard) → Linux jumpbox (no public IP)                                                  | Bastion TLS 443 only           |
+| Operator      | Azure Bastion (Standard) → Windows jumpbox (no public IP)                                                | Bastion TLS 443 only           |
 | Workload      | App Service Plan (Linux P0v3) hosting `api` + `web` Web Apps for Containers, ingress disabled publicly   | None                           |
 | Data          | Cosmos DB (NoSQL), Storage Account (Blob), Azure AI Foundry / OpenAI, Azure Container Registry (Premium) | `publicNetworkAccess=Disabled` |
 | Identity      | One User-Assigned Managed Identity (UAMI) federated to apps + jumpbox                                    | n/a                            |
@@ -44,10 +44,10 @@ All parameters are defined in [`infra/bicep/main.bicep`](../infra/bicep/main.bic
 | ----------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `isPrivate`             | `true`            | Master switch. `true` = full private deployment (everything in this doc). `false` = legacy public demo, no VNet, no PEs.      |
 | `vnetAddressPrefix`     | `10.50.0.0/16`    | CIDR for the VNet. Must accommodate every subnet listed in §4.                                                                |
-| `deployJumpbox`         | `true`            | When `true` (and `isPrivate=true`), provisions the Linux jumpbox + Bastion.                                                   |
+| `deployJumpbox`         | `true`            | When `true` (and `isPrivate=true`), provisions the Windows jumpbox + Bastion.                                                 |
 | `jumpboxAdminUsername`  | `azureuser`       | Local admin user on the jumpbox.                                                                                              |
-| `jumpboxAdminPublicKey` | _(empty, secure)_ | **Required when `deployJumpbox=true`**. Paste the contents of an OpenSSH public key (e.g. `~/.ssh/id_rsa.pub`).               |
-| `bastionSku`            | `Standard`        | `Standard` is required for native-client SSH tunneling used by [`infra/0-connect-jumpbox.sh`](../infra/0-connect-jumpbox.sh). |
+| `jumpboxAdminPassword`  | _(empty, secure)_ | **Required when `deployJumpbox=true`**. Windows admin password (12–123 chars; 3 of: lowercase/uppercase/digit/special).         |
+| `bastionSku`            | `Standard`        | `Standard` is required for native-client RDP tunneling used by [`infra/0-connect-jumpbox.sh`](../infra/0-connect-jumpbox.sh). |
 
 ### Application
 | Parameter           | Default                         | Description                                                                             |
@@ -76,7 +76,7 @@ Each module in [`infra/bicep/modules/`](../infra/bicep/modules/) is conditional 
 | `web-app-container.bicep`      | (per app) Web App for Containers + VNet integration + private endpoint | Public ingress disabled                                           | UAMI                                      |
 | `ai-foundry.bicep`             | Azure AI Services + Foundry project + model deployment                 | `publicNetworkAccess=Disabled`                                    | UAMI → Azure AI User                      |
 | `bastion.bicep` *              | Azure Bastion (`Standard`)                                             | TLS 443 only                                                      | Operator Entra ID                         |
-| `jumpbox.bicep` *              | Linux VM, no public IP, UAMI attached                                  | n/a                                                               | SSH key (Bastion-tunneled)                |
+| `jumpbox.bicep` *              | Windows VM, no public IP, UAMI attached, CustomScriptExtension installs az/git/bicep | n/a                                                               | Admin password (Bastion-tunneled RDP)     |
 | `private-endpoint.bicep` *     | Used by every PaaS module above                                        | n/a                                                               | n/a                                       |
 
 > The legacy `container-apps-environment.bicep` is retained on disk for reference but is no longer instantiated — the workload now runs on App Service.
@@ -98,7 +98,7 @@ Defined in [`infra/bicep/modules/network.bicep`](../infra/bicep/modules/network.
 
 **NSG posture (deny-by-default with explicit allows):**
 - `nsg-pe`: allow VNet→VNet TCP 443
-- `nsg-jumpbox`: allow VNet TCP 22/3389 (Bastion only)
+- `nsg-jumpbox`: allow VNet TCP 3389 (Bastion only)
 - `nsg-bastion`: full Bastion ruleset per Microsoft docs (HTTPS in, GatewayManager, Load Balancer, SSH/RDP out, AzureCloud:443 out)
 - `nsg-aca` (legacy, kept empty): platform-managed when ACA was used
 
@@ -194,20 +194,20 @@ Use the **Deploy to Azure** button in the [root README](../README.md#-one-click-
     -l swedencentral \
     -p invstdemo \
     -e dev \
-    --ssh-key-file ~/.ssh/id_rsa.pub
+    --admin-password '<Strong!Passw0rd>'
 
-# 2. Open an SSH tunnel into the jumpbox via Bastion
+# 2. Open an RDP tunnel into the Windows jumpbox via Bastion
 ./infra/0-connect-jumpbox.sh -g <resource-group>
 
-# On the jumpbox:
-git clone https://github.com/Azure-Samples/Agentic-AI-Investment-Analysis-Sample.git
-cd Agentic-AI-Investment-Analysis-Sample
+# On the jumpbox (PowerShell):
+#   The deployment auto-clones the repo to C:\Users\Public\Desktop.
+cd C:\Users\Public\Desktop\Agentic-AI-Investment-Analysis-Sample
 
 # 3. Build & push container images to the private ACR (uses UAMI on the jumpbox)
-./infra/2-build-and-push-images.sh -g <resource-group>
+bash infra/2-build-and-push-images.sh -g <resource-group>
 
 # 4. Roll out / update the api + web Web Apps
-./infra/3-deploy-apps.sh -g <resource-group>
+bash infra/3-deploy-apps.sh -g <resource-group>
 ```
 
 Flags accepted by `1-deploy-azure-infra.sh`:
@@ -221,7 +221,8 @@ Flags accepted by `1-deploy-azure-infra.sh`:
 | `-e, --environment`               | Environment tag                                          |
 | `--public`                        | Deploy the legacy public topology (`isPrivate=false`)    |
 | `--no-jumpbox`                    | Skip jumpbox + Bastion                                   |
-| `--ssh-key-file <path>`           | Public key for the jumpbox (default `~/.ssh/id_rsa.pub`) |
+| `--ssh-key-file <path>`           | _Deprecated_ — the jumpbox is now Windows. Use `--admin-password`. |
+| `--admin-password <pwd>`          | Windows admin password for the jumpbox (12–123 chars; complexity rules apply). Prompted interactively if omitted. |
 | `--bastion-sku <Basic\|Standard>` | Default `Standard`                                       |
 | `-d, --debug`                     | Enable Azure CLI debug logging                           |
 
@@ -235,13 +236,13 @@ Flags accepted by `1-deploy-azure-infra.sh`:
 ```bash
 ./infra/0-connect-jumpbox.sh -g <resource-group>
 ```
-Internally this runs `az network bastion ssh --auth-type ssh-key`, which requires Bastion **Standard** SKU.
+Internally this runs `az network bastion rdp` (Windows host) or `az network bastion tunnel` to forward localhost:50389 → VM:3389 (macOS/Linux), and requires Bastion **Standard** SKU.
 
 ### Reaching the Web app from your laptop
 The Web app has internal-only ingress. To browse it during development, open an additional Bastion tunnel from the jumpbox to the Web app FQDN, or deploy a self-service VPN gateway / Azure Front Door Premium with Private Link in front of it. The sample does **not** ship a VPN gateway — Bastion + jumpbox is the documented path.
 
-### Rotating the jumpbox key
-Re-run `1-deploy-azure-infra.sh --ssh-key-file <new.pub>` against the same resource group; the VM extension rewrites `authorized_keys`.
+### Rotating the jumpbox password
+Re-run `1-deploy-azure-infra.sh --admin-password '<new>'` against the same resource group; the VM admin password is updated in place.
 
 ### Tearing down
 ```bash
@@ -289,5 +290,5 @@ Use `--public` on `1-deploy-azure-infra.sh`, or pass `isPrivate=false` directly 
 - [`infra/bicep/main.bicep`](../infra/bicep/main.bicep) — root template (resource-group scope)
 - [`infra/bicep/modules/`](../infra/bicep/modules/) — per-resource modules
 - [`infra/1-deploy-azure-infra.sh`](../infra/1-deploy-azure-infra.sh) — CLI deploy wrapper
-- [`infra/0-connect-jumpbox.sh`](../infra/0-connect-jumpbox.sh) — Bastion SSH tunnel
+- [`infra/0-connect-jumpbox.sh`](../infra/0-connect-jumpbox.sh) — Bastion RDP tunnel to the Windows jumpbox
 - [`infra/2-build-and-push-images.sh`](../infra/2-build-and-push-images.sh) / [`3-deploy-apps.sh`](../infra/3-deploy-apps.sh) — image + app rollout (run on the jumpbox in private mode)

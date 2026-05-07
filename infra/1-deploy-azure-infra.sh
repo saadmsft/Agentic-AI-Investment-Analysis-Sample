@@ -21,7 +21,7 @@ ENVIRONMENT="dev"
 DEBUG="false"
 IS_PRIVATE="true"
 DEPLOY_JUMPBOX="true"
-SSH_KEY_FILE=""
+ADMIN_PASSWORD=""
 BASTION_SKU="Standard"
 
 # Function to show usage
@@ -38,7 +38,7 @@ usage() {
     echo "  -a, --ai-foundry-location  AI Foundry location (default: swedencentral)"
     echo "  --public                   Deploy the legacy public topology (isPrivate=false)"
     echo "  --no-jumpbox               Skip jumpbox/Bastion deployment when private"
-    echo "  --ssh-key-file <path>      Path to SSH public key for the jumpbox (default: ~/.ssh/id_rsa.pub)"
+    echo "  --admin-password <pwd>     Admin password for the Windows jumpbox VM (12-123 chars; mix of upper/lower/digit/special). If omitted you will be prompted."
     echo "  --bastion-sku <sku>        Bastion SKU: Basic or Standard (default: Standard)"
     echo "  -d, --debug                Enable debug logging"
     echo "  -h, --help                 Show this help message"
@@ -82,7 +82,11 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --ssh-key-file)
-            SSH_KEY_FILE="$2"
+            echo -e "${YELLOW}⚠️  --ssh-key-file is deprecated; the jumpbox is now Windows. Use --admin-password instead.${NC}"
+            shift 2
+            ;;
+        --admin-password)
+            ADMIN_PASSWORD="$2"
             shift 2
             ;;
         --bastion-sku)
@@ -164,20 +168,28 @@ fi
 echo -e "${BLUE}🏗️ Deploying Azure infrastructure...${NC}"
 DEPLOYMENT_NAME="ai-invest-sample-$(date +%s)"
 
-# Resolve SSH public key (required when deploying the jumpbox)
-JUMPBOX_PUBKEY=""
+# Resolve Windows jumpbox admin password (required when deploying the jumpbox)
+JUMPBOX_PASSWORD=""
 if [ "$IS_PRIVATE" == "true" ] && [ "$DEPLOY_JUMPBOX" == "true" ]; then
-    if [ -z "$SSH_KEY_FILE" ]; then
-        SSH_KEY_FILE="$HOME/.ssh/id_rsa.pub"
+    if [ -z "$ADMIN_PASSWORD" ]; then
+        echo -e "${YELLOW}🔐 Enter an admin password for the Windows jumpbox VM.${NC}"
+        echo -e "${YELLOW}   Must be 12-123 chars and include 3 of: lowercase, uppercase, digit, special.${NC}"
+        read -r -s -p "Admin password: " ADMIN_PASSWORD
+        echo
+        read -r -s -p "Confirm password: " ADMIN_PASSWORD_CONFIRM
+        echo
+        if [ "$ADMIN_PASSWORD" != "$ADMIN_PASSWORD_CONFIRM" ]; then
+            echo -e "${RED}❌ Passwords do not match.${NC}"
+            exit 1
+        fi
     fi
-    if [ ! -f "$SSH_KEY_FILE" ]; then
-        echo -e "${RED}❌ SSH public key not found at $SSH_KEY_FILE.${NC}"
-        echo -e "${YELLOW}   Generate one with 'ssh-keygen -t rsa -b 4096' or pass --ssh-key-file <path>.${NC}"
-        echo -e "${YELLOW}   Alternatively, re-run with --no-jumpbox or --public to skip.${NC}"
+    if [ ${#ADMIN_PASSWORD} -lt 12 ]; then
+        echo -e "${RED}❌ Admin password must be at least 12 characters.${NC}"
+        echo -e "${YELLOW}   Re-run with --admin-password '<value>' or --no-jumpbox / --public to skip.${NC}"
         exit 1
     fi
-    JUMPBOX_PUBKEY=$(cat "$SSH_KEY_FILE")
-    echo -e "${GREEN}✅ Using SSH public key: $SSH_KEY_FILE${NC}"
+    JUMPBOX_PASSWORD="$ADMIN_PASSWORD"
+    echo -e "${GREEN}✅ Using provided admin password for Windows jumpbox${NC}"
 fi
 
 optional_args=()
@@ -197,7 +209,7 @@ az deployment group create \
         isPrivate="$IS_PRIVATE" \
         deployJumpbox="$DEPLOY_JUMPBOX" \
         bastionSku="$BASTION_SKU" \
-        jumpboxAdminPublicKey="$JUMPBOX_PUBKEY" \
+        jumpboxAdminPassword="$JUMPBOX_PASSWORD" \
     --name "$DEPLOYMENT_NAME" \
     --output table ${optional_args[@]}
 

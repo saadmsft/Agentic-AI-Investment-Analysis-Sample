@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.42.1.51946",
-      "templateHash": "3235998341901409051"
+      "templateHash": "4960232274037771954"
     }
   },
   "parameters": {
@@ -42,7 +42,7 @@
       "type": "bool",
       "defaultValue": true,
       "metadata": {
-        "description": "When true (and isPrivate=true), also deploys a Linux jumpbox + Azure Bastion for operator access."
+        "description": "When true (and isPrivate=true), also deploys a Windows jumpbox + Azure Bastion for operator access."
       }
     },
     "vnetAddressPrefix": {
@@ -59,11 +59,11 @@
         "description": "Admin username for the jumpbox VM"
       }
     },
-    "jumpboxAdminPublicKey": {
+    "jumpboxAdminPassword": {
       "type": "securestring",
       "defaultValue": "",
       "metadata": {
-        "description": "SSH public key for the jumpbox VM (required when deployJumpbox=true)"
+        "description": "Admin password for the Windows jumpbox VM (required when deployJumpbox=true). Must satisfy Azure Windows VM password complexity rules: 12-123 chars; 3 of: lowercase, uppercase, digit, special."
       }
     },
     "bastionSku": {
@@ -43161,8 +43161,8 @@
           "adminUsername": {
             "value": "[parameters('jumpboxAdminUsername')]"
           },
-          "adminPublicKey": {
-            "value": "[parameters('jumpboxAdminPublicKey')]"
+          "adminPassword": {
+            "value": "[parameters('jumpboxAdminPassword')]"
           },
           "userAssignedIdentityId": {
             "value": "[reference('userAssignedIdentity').outputs.resourceId.value]"
@@ -43178,7 +43178,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.42.1.51946",
-              "templateHash": "5495470989234358791"
+              "templateHash": "16365167653907153569"
             }
           },
           "parameters": {
@@ -43203,22 +43203,22 @@
             },
             "vmSize": {
               "type": "string",
-              "defaultValue": "Standard_B2s",
+              "defaultValue": "Standard_D2s_v5",
               "metadata": {
-                "description": "VM size. B-series default — cheap, enough for az cli + docker."
+                "description": "VM size. Default sized for az cli + dev tooling."
               }
             },
             "adminUsername": {
               "type": "string",
               "defaultValue": "azureuser",
               "metadata": {
-                "description": "Admin username for SSH (accessed via Bastion)"
+                "description": "Admin username for RDP (accessed via Bastion)"
               }
             },
-            "adminPublicKey": {
+            "adminPassword": {
               "type": "securestring",
               "metadata": {
-                "description": "SSH public key used to log in (via Bastion)"
+                "description": "Admin password used to log in (via Bastion RDP). Must satisfy Azure Windows VM password complexity rules."
               }
             },
             "userAssignedIdentityId": {
@@ -43236,7 +43236,7 @@
             }
           },
           "variables": {
-            "cloudInit": "#cloud-config\npackage_update: true\npackage_upgrade: false\npackages:\n  - ca-certificates\n  - curl\n  - gnupg\n  - lsb-release\n  - jq\n  - git\nruncmd:\n  - curl -sL https://aka.ms/InstallAzureCLIDeb | bash\n  - az bicep install || true\n  - install -m 0755 -d /etc/apt/keyrings\n  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg\n  - chmod a+r /etc/apt/keyrings/docker.gpg\n  - echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable\" > /etc/apt/sources.list.d/docker.list\n  - apt-get update\n  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin\n  - usermod -aG docker azureuser\n"
+            "bootstrapScript": "$ErrorActionPreference = \"Continue\"\n$ProgressPreference     = \"SilentlyContinue\"\nStart-Transcript -Path \"C:\\\\Windows\\\\Temp\\\\jumpbox-bootstrap.log\" -Append\n\n# Trust PSGallery + ensure TLS 1.2\n[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12\n\n# 1) Install Chocolatey (used to install az cli, git, bicep)\nif (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) {\n  Set-ExecutionPolicy Bypass -Scope Process -Force\n  iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))\n}\n\n$env:Path = \"$env:Path;C:\\\\ProgramData\\\\chocolatey\\\\bin\"\n\n# 2) Operator tools\nchoco install -y --no-progress azure-cli\nchoco install -y --no-progress git\nchoco install -y --no-progress bicep\nchoco install -y --no-progress microsoft-edge\n\n# 3) Docker EE on Windows Server (best-effort; safe to fail — `az acr build`\n#    is the recommended path for image builds from the jumpbox).\ntry {\n  Install-WindowsFeature -Name Containers -IncludeManagementTools -ErrorAction SilentlyContinue\n  Install-Module -Name DockerMsftProvider -Repository PSGallery -Force -ErrorAction SilentlyContinue\n  Install-Package -Name docker -ProviderName DockerMsftProvider -Force -ErrorAction SilentlyContinue\n} catch {\n  Write-Host \"Docker install skipped: $_\"\n}\n\n# 4) Clone the sample repo to the operator desktop for convenience\n$repoDir = \"C:\\\\Users\\\\Public\\\\Desktop\\\\Agentic-AI-Investment-Analysis-Sample\"\nif (-not (Test-Path $repoDir)) {\n  & \"C:\\\\Program Files\\\\Git\\\\bin\\\\git.exe\" clone https://github.com/Azure-Samples/Agentic-AI-Investment-Analysis-Sample.git $repoDir 2>&1 | Out-Null\n}\n\nStop-Transcript\n"
           },
           "resources": [
             {
@@ -43277,9 +43277,9 @@
                 },
                 "storageProfile": {
                   "imageReference": {
-                    "publisher": "Canonical",
-                    "offer": "ubuntu-24_04-lts",
-                    "sku": "server",
+                    "publisher": "MicrosoftWindowsServer",
+                    "offer": "WindowsServer",
+                    "sku": "2022-datacenter-azure-edition",
                     "version": "latest"
                   },
                   "osDisk": {
@@ -43292,17 +43292,10 @@
                 "osProfile": {
                   "computerName": "[parameters('name')]",
                   "adminUsername": "[parameters('adminUsername')]",
-                  "customData": "[base64(variables('cloudInit'))]",
-                  "linuxConfiguration": {
-                    "disablePasswordAuthentication": true,
-                    "ssh": {
-                      "publicKeys": [
-                        {
-                          "path": "[format('/home/{0}/.ssh/authorized_keys', parameters('adminUsername'))]",
-                          "keyData": "[parameters('adminPublicKey')]"
-                        }
-                      ]
-                    }
+                  "adminPassword": "[parameters('adminPassword')]",
+                  "windowsConfiguration": {
+                    "enableAutomaticUpdates": true,
+                    "provisionVMAgent": true
                   }
                 },
                 "networkProfile": {
@@ -43315,6 +43308,24 @@
               },
               "dependsOn": [
                 "[resourceId('Microsoft.Network/networkInterfaces', format('{0}-nic', parameters('name')))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Compute/virtualMachines/extensions",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/{1}', parameters('name'), 'bootstrap')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "publisher": "Microsoft.Compute",
+                "type": "CustomScriptExtension",
+                "typeHandlerVersion": "1.10",
+                "autoUpgradeMinorVersion": true,
+                "settings": {
+                  "script": "[base64(variables('bootstrapScript'))]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines', parameters('name'))]"
               ]
             }
           ],

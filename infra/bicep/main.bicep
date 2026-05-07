@@ -15,7 +15,7 @@ param location string = resourceGroup().location
 @description('When true, deploys the zero-trust topology: VNet + private endpoints + internal ACA + disabled public network access on all PaaS resources.')
 param isPrivate bool = true
 
-@description('When true (and isPrivate=true), also deploys a Linux jumpbox + Azure Bastion for operator access.')
+@description('When true (and isPrivate=true), also deploys a Windows jumpbox + Azure Bastion for operator access.')
 param deployJumpbox bool = true
 
 @description('VNet address space used when isPrivate=true')
@@ -24,9 +24,9 @@ param vnetAddressPrefix string = '10.50.0.0/16'
 @description('Admin username for the jumpbox VM')
 param jumpboxAdminUsername string = 'azureuser'
 
-@description('SSH public key for the jumpbox VM (required when deployJumpbox=true)')
+@description('Admin password for the Windows jumpbox VM (required when deployJumpbox=true). Must satisfy Azure Windows VM password complexity rules: 12-123 chars; 3 of: lowercase, uppercase, digit, special.')
 @secure()
-param jumpboxAdminPublicKey string = ''
+param jumpboxAdminPassword string = ''
 
 @description('Azure Bastion SKU. Standard required for native-client tunneling.')
 @allowed([ 'Basic', 'Standard' ])
@@ -249,7 +249,7 @@ module jumpbox 'modules/jumpbox.bicep' = if (isPrivate && deployJumpbox) {
     location: location
     subnetId: network.outputs.jumpboxSubnetId
     adminUsername: jumpboxAdminUsername
-    adminPublicKey: jumpboxAdminPublicKey
+    adminPassword: jumpboxAdminPassword
     userAssignedIdentityId: userAssignedIdentity.outputs.resourceId
     tags: tags
   }

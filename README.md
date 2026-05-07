@@ -126,7 +126,7 @@ The application uses Server-Sent Events (SSE) for real-time updates:
 
 ## � One-Click Azure Deployment
 
-Deploy the full Azure infrastructure (zero-trust topology by default — VNet, private endpoints, internal Container Apps, Cosmos DB, Storage, Azure AI Foundry, Key Vault, Container Registry, and an optional jumpbox + Azure Bastion) directly from the Azure Portal using the pre-built ARM template at [infra/bicep/main.json](infra/bicep/main.json):
+Deploy the full Azure infrastructure (zero-trust topology by default — VNet, private endpoints, internal Container Apps, Cosmos DB, Storage, Azure AI Foundry, Key Vault, Container Registry, and an optional Windows jumpbox + Azure Bastion) directly from the Azure Portal using the pre-built ARM template at [infra/bicep/main.json](infra/bicep/main.json):
 <p align="center">
     <picture>
     <img src="./_assets/zero-trust-architecture.png" alt="AI Investment Analysis - Private Zero-Trust Architecture" style="max-width:800px;width:100%" />
@@ -148,7 +148,7 @@ Deploy the full Azure infrastructure (zero-trust topology by default — VNet, p
 ### Before you click
 
 1. **Create (or pick) a resource group** in your target subscription — the template deploys at resource-group scope.
-2. **Generate an SSH public key** if you keep the default `deployJumpbox=true`. Paste the contents of `~/.ssh/id_rsa.pub` (or any OpenSSH public key) into the `jumpboxAdminPublicKey` field. Leave it empty only if you set `deployJumpbox=false`.
+2. **Choose a Windows admin password** if you keep the default `deployJumpbox=true`. Enter it in the `jumpboxAdminPassword` field. The password must be 12–123 characters and contain at least three of: lowercase, uppercase, digit, special character. Leave it empty only if you set `deployJumpbox=false`.
 3. **Pick locations** that have capacity for Azure AI Foundry models (e.g. `swedencentral`, `eastus2`) for `aiFoundryLocation`.
 
 ### Key parameters
@@ -160,9 +160,9 @@ Deploy the full Azure infrastructure (zero-trust topology by default — VNet, p
 | `location`              | resource group location | Region for most resources                                                                                           |
 | `aiFoundryLocation`     | resource group location | Region for Azure AI Foundry / model deployment                                                                      |
 | `isPrivate`             | `true`                  | Deploy zero-trust topology (VNet + private endpoints + internal ACA). Set `false` for a public, demo-only topology. |
-| `deployJumpbox`         | `true`                  | Deploy a Linux jumpbox + Azure Bastion for operator access (only when `isPrivate=true`)                             |
-| `jumpboxAdminPublicKey` | _(empty)_               | **Required when `deployJumpbox=true`** — your SSH public key                                                        |
-| `bastionSku`            | `Standard`              | `Basic` or `Standard` (Standard required for native-client tunneling)                                               |
+| `deployJumpbox`         | `true`                  | Deploy a Windows jumpbox + Azure Bastion for operator access (only when `isPrivate=true`)                           |
+| `jumpboxAdminPassword`  | _(empty)_               | **Required when `deployJumpbox=true`** — Windows admin password (12–123 chars, complexity rules apply)             |
+| `bastionSku`            | `Standard`              | `Basic` or `Standard` (Standard required for native-client RDP tunneling)                                          |
 | `vnetAddressPrefix`     | `10.50.0.0/16`          | VNet CIDR when `isPrivate=true`                                                                                     |
 
 > **Note:** The portal one-click flow provisions the Azure infrastructure only. After the deployment finishes, build and push the container images and roll out the apps with the helper scripts:
@@ -181,7 +181,7 @@ The end-to-end reference for the zero-trust topology — every parameter, module
 - Customize VNet sizing, subnets, or NSG rules
 - Understand which roles are granted to the workload UAMI and the deployer
 - Switch between `isPrivate=true` (zero-trust) and `isPrivate=false` (public demo)
-- Operate the jumpbox + Azure Bastion access plane
+- Operate the jumpbox + Azure Bastion access plane (Windows VM, RDP via Bastion)
 - Troubleshoot private-endpoint, DNS, or image-pull issues
 
 ## �📦 Prerequisites

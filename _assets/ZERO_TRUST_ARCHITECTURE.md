@@ -24,7 +24,7 @@ flowchart LR
           Bastion[Azure Bastion<br/>Standard SKU<br/>*only* public IP]:::pub
         end
         subgraph S_Jump[snet-jumpbox]
-          Jump[Linux jumpbox VM<br/>no public IP<br/>UAMI attached]:::vnet
+          Jump[Windows jumpbox VM<br/>no public IP<br/>UAMI attached]:::vnet
         end
         subgraph S_Aca["snet-aca-infra (delegated)"]
           ACA[Container Apps Environment<br/>workload profiles · internal=true]:::app
@@ -117,7 +117,7 @@ flowchart LR
 
 ### Operator deploy flow
 1. Operator opens browser → **Azure Bastion** (HTTPS 443, Azure-hosted TLS).
-2. Bastion proxies SSH to the **jumpbox VM** inside `snet-jumpbox`.
+2. Bastion proxies RDP to the **Windows jumpbox VM** inside `snet-jumpbox`.
 3. Jumpbox uses its UAMI to:
    - `docker push` to the private **ACR** via PE (`privatelink.azurecr.io`).
    - `az deployment group create` for the API / Web container app bicep.

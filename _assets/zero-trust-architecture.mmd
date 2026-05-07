@@ -19,7 +19,7 @@ flowchart LR
           Bastion["Azure Bastion · Standard<br/>(only public IP)"]:::pub
         end
         subgraph S_Jump["snet-jumpbox /27"]
-          Jump["Linux jumpbox VM<br/>no public IP · UAMI"]:::vnet
+          Jump["Windows jumpbox VM<br/>no public IP · UAMI"]:::vnet
         end
         subgraph S_Aca["snet-aca-infra /23 · delegated"]
           ACA["Container Apps Environment<br/>workload profiles · internal=true"]:::app
@@ -64,7 +64,7 @@ flowchart LR
     end
 
     Op -- "HTTPS 443" --> Bastion
-    Bastion -- "SSH tunnel" --> Jump
+    Bastion -- "RDP tunnel" --> Jump
     Jump -- "docker push / az deploy" --> PE_Acr
     Jump -- "browser tunnel" --> WebApp
 

@@ -126,7 +126,10 @@ The application uses Server-Sent Events (SSE) for real-time updates:
 
 ## � One-Click Azure Deployment
 
-Deploy the full Azure infrastructure (zero-trust topology by default — VNet, private endpoints, internal Container Apps, Cosmos DB, Storage, Azure AI Foundry, Key Vault, Container Registry, and an optional Windows jumpbox + Azure Bastion) directly from the Azure Portal using the pre-built ARM template at [infra/bicep/main.json](infra/bicep/main.json):
+Deploy the full Azure infrastructure (zero-trust topology by default — VNet, private endpoints, internal Container Apps, Cosmos DB, Storage, Azure AI Foundry, Key Vault, Container Registry, and an optional jumpbox + Azure Bastion) directly from the Azure Portal. Two pre-built ARM templates are provided so you can pick the operator OS that matches your laptop:
+
+- **Windows jumpbox (RDP via Bastion)** — recommended for Windows operators. Template: [infra/bicep/main.json](infra/bicep/main.json).
+- **Linux jumpbox (SSH via Bastion)** — recommended for macOS/Linux operators. Template: [infra/bicep/main-linux.json](infra/bicep/main-linux.json).
 <p align="center">
     <picture>
     <img src="./_assets/zero-trust-architecture.png" alt="AI Investment Analysis - Private Zero-Trust Architecture" style="max-width:800px;width:100%" />
@@ -141,14 +144,23 @@ Deploy the full Azure infrastructure (zero-trust topology by default — VNet, p
 
 > See [`_assets/ZERO_TRUST_ARCHITECTURE.md`](_assets/ZERO_TRUST_ARCHITECTURE.md) for a full breakdown of the topology above.
 
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FAzure-Samples%2FAgentic-AI-Investment-Analysis-Sample%2Fmain%2Finfra%2Fbicep%2Fmain.json)
+#### Deploy with a Windows jumpbox (RDP)
 
-[![Visualize](https://raw.githubusercontent.com/Azure/azure-quickstart-templates/master/1-CONTRIBUTION-GUIDE/images/visualizebutton.svg?sanitize=true)](http://armviz.io/#/?load=https%3A%2F%2Fraw.githubusercontent.com%2FAzure-Samples%2FAgentic-AI-Investment-Analysis-Sample%2Fmain%2Finfra%2Fbicep%2Fmain.json)
+[![Deploy to Azure (Windows jumpbox)](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fsaadmsft%2FAgentic-AI-Investment-Analysis-Sample%2Fmain%2Finfra%2Fbicep%2Fmain.json)
+[![Visualize](https://raw.githubusercontent.com/Azure/azure-quickstart-templates/master/1-CONTRIBUTION-GUIDE/images/visualizebutton.svg?sanitize=true)](http://armviz.io/#/?load=https%3A%2F%2Fraw.githubusercontent.com%2Fsaadmsft%2FAgentic-AI-Investment-Analysis-Sample%2Fmain%2Finfra%2Fbicep%2Fmain.json)
+
+#### Deploy with a Linux jumpbox (SSH)
+
+[![Deploy to Azure (Linux jumpbox)](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fsaadmsft%2FAgentic-AI-Investment-Analysis-Sample%2Fmain%2Finfra%2Fbicep%2Fmain-linux.json)
+[![Visualize](https://raw.githubusercontent.com/Azure/azure-quickstart-templates/master/1-CONTRIBUTION-GUIDE/images/visualizebutton.svg?sanitize=true)](http://armviz.io/#/?load=https%3A%2F%2Fraw.githubusercontent.com%2Fsaadmsft%2FAgentic-AI-Investment-Analysis-Sample%2Fmain%2Finfra%2Fbicep%2Fmain-linux.json)
 
 ### Before you click
 
 1. **Create (or pick) a resource group** in your target subscription — the template deploys at resource-group scope.
-2. **Choose a Windows admin password** if you keep the default `deployJumpbox=true`. Enter it in the `jumpboxAdminPassword` field. The password must be 12–123 characters and contain at least three of: lowercase, uppercase, digit, special character. Leave it empty only if you set `deployJumpbox=false`.
+2. **Choose your jumpbox credential** if you keep the default `deployJumpbox=true`:
+   - **Windows template** — supply a `jumpboxAdminPassword` (12–123 chars; at least three of lowercase, uppercase, digit, special character).
+   - **Linux template** — paste the contents of `~/.ssh/id_rsa.pub` (or any OpenSSH public key) into `jumpboxAdminPublicKey`.
+   Leave the credential empty only if you set `deployJumpbox=false`.
 3. **Pick locations** that have capacity for Azure AI Foundry models (e.g. `swedencentral`, `eastus2`) for `aiFoundryLocation`.
 
 ### Key parameters
@@ -160,8 +172,9 @@ Deploy the full Azure infrastructure (zero-trust topology by default — VNet, p
 | `location`              | resource group location | Region for most resources                                                                                           |
 | `aiFoundryLocation`     | resource group location | Region for Azure AI Foundry / model deployment                                                                      |
 | `isPrivate`             | `true`                  | Deploy zero-trust topology (VNet + private endpoints + internal ACA). Set `false` for a public, demo-only topology. |
-| `deployJumpbox`         | `true`                  | Deploy a Windows jumpbox + Azure Bastion for operator access (only when `isPrivate=true`)                           |
-| `jumpboxAdminPassword`  | _(empty)_               | **Required when `deployJumpbox=true`** — Windows admin password (12–123 chars, complexity rules apply)             |
+| `deployJumpbox`         | `true`                  | Deploy a jumpbox + Azure Bastion for operator access (only when `isPrivate=true`)                                   |
+| `jumpboxAdminPassword`  | _(empty)_               | **Windows template only** — required when `deployJumpbox=true`. 12–123 chars, complexity rules apply.               |
+| `jumpboxAdminPublicKey` | _(empty)_               | **Linux template only** — required when `deployJumpbox=true`. OpenSSH public key.                                   |
 | `bastionSku`            | `Standard`              | `Basic` or `Standard` (Standard required for native-client RDP tunneling)                                          |
 | `vnetAddressPrefix`     | `10.50.0.0/16`          | VNet CIDR when `isPrivate=true`                                                                                     |
 

@@ -12,25 +12,11 @@ param location string = resourceGroup().location
 // ################################################
 // Zero-trust / networking parameters
 
-@description('When true, deploys the zero-trust topology: VNet + private endpoints + internal ACA + disabled public network access on all PaaS resources.')
+@description('When true, deploys the zero-trust topology: VNet + private endpoints + private App Service + disabled public network access on all PaaS resources.')
 param isPrivate bool = true
 
-@description('When true (and isPrivate=true), also deploys a Windows jumpbox + Azure Bastion for operator access.')
-param deployJumpbox bool = true
-
-@description('VNet address space used when isPrivate=true')
-param vnetAddressPrefix string = '10.50.0.0/16'
-
-@description('Admin username for the jumpbox VM')
-param jumpboxAdminUsername string = 'azureuser'
-
-@description('Admin password for the Windows jumpbox VM (required when deployJumpbox=true). Must satisfy Azure Windows VM password complexity rules: 12-123 chars; 3 of: lowercase, uppercase, digit, special.')
-@secure()
-param jumpboxAdminPassword string = ''
-
-@description('Azure Bastion SKU. Standard required for native-client tunneling.')
-@allowed([ 'Basic', 'Standard' ])
-param bastionSku string = 'Standard'
+@description('Address space for the workload VNet. Customer supplies a /26 (e.g. 10.123.45.0/26). Required for both private and public deployments (a placeholder is acceptable when isPrivate=false).')
+param vnetAddressPrefix string
 
 // ################################################
 // Application specific parameters
@@ -39,12 +25,12 @@ param bastionSku string = 'Standard'
 param cosmosDbName string = 'ai-investment-analysis-sample'
 
 param cosmosDBContainerNames array = [
-  {name: 'opportunities', partitionKey: '/owner_id'}
-  {name: 'users', partitionKey: '/email'}
-  {name: 'documents', partitionKey: '/opportunity_id'}
-  {name: 'analysis', partitionKey: '/opportunity_id'}
-  {name: 'workflow_events', partitionKey: '/analysis_id'}
-  {name: 'what_if_conversations', partitionKey: '/analysis_id'}
+  { name: 'opportunities', partitionKey: '/owner_id' }
+  { name: 'users', partitionKey: '/email' }
+  { name: 'documents', partitionKey: '/opportunity_id' }
+  { name: 'analysis', partitionKey: '/opportunity_id' }
+  { name: 'workflow_events', partitionKey: '/analysis_id' }
+  { name: 'what_if_conversations', partitionKey: '/analysis_id' }
 ]
 
 @description('Name of the blob storage container for documents')
@@ -53,6 +39,44 @@ param docsContainerName string = 'opportunity-documents'
 @description('Location for AI Foundry resources')
 param aiFoundryLocation string = resourceGroup().location
 
+// ################################################
+// Optional explicit resource-name overrides.
+// Leave any of these empty ('') to fall back to the default
+// pattern `${namePrefix}-<kind>-${uniqueString(rg.id)}` shown next to each
+// parameter. Customers that have their own naming convention (e.g. Cloud
+// Adoption Framework / corporate standard) can supply the exact names here
+// via parameters file. Names are not validated for Azure length/charset
+// rules — the caller is responsible for picking a compliant name.
+
+@description('Optional. Explicit name for the workload VNet. Default: <namePrefix>-vnet-<hash>')
+param vnetNameOverride string = ''
+
+@description('Optional. Explicit name for the User-Assigned Managed Identity. Default: <namePrefix>-uai-<hash>')
+param userAssignedIdentityNameOverride string = ''
+
+@description('Optional. Explicit name for the Log Analytics workspace. Default: <namePrefix>-law-<hash>')
+param logAnalyticsWorkspaceNameOverride string = ''
+
+@description('Optional. Explicit name for the Application Insights component. Default: <namePrefix>-appi-<hash>')
+param appInsightsNameOverride string = ''
+
+@description('Optional. Explicit name for the Azure Monitor Private Link Scope. Default: <namePrefix>-ampls-<hash>')
+param amplsNameOverride string = ''
+
+@description('Optional. Explicit name for the Storage account (must be 3-24 lowercase alphanumerics). Default: <namePrefix>sta<hash> trimmed to 24 chars')
+param storageAccountNameOverride string = ''
+
+@description('Optional. Explicit name for the Cosmos DB account. Default: <namePrefix>-cosmosdb-<hash>')
+param cosmosAccountNameOverride string = ''
+
+@description('Optional. Explicit name for the Azure Container Registry (must be 5-50 alphanumerics). Default: <namePrefix>acr<hash>')
+param containerRegistryNameOverride string = ''
+
+@description('Optional. Explicit name for the App Service Plan. Default: <namePrefix>-asp-<hash>')
+param appServicePlanNameOverride string = ''
+
+@description('Optional. Explicit base name (max 12 chars, lowercase) used to derive AI Foundry resource names. Default: derived from <namePrefix>-<environment>-<rg.id>')
+param aiFoundryBaseNameOverride string = ''
 
 var resourceGroupId = resourceGroup().id
 var tags = {
@@ -62,13 +86,27 @@ var tags = {
 
 var shortHash = substring(uniqueString(resourceGroup().id, deployment().name), 0, 8)
 
+// Resolved resource names — use override when supplied, otherwise the
+// default generator pattern.
+var defaultStorageName = toLower('${namePrefix}sta${uniqueString(resourceGroupId)}')
+var resolvedVnetName = empty(vnetNameOverride) ? toLower('${namePrefix}-vnet-${uniqueString(resourceGroupId)}') : vnetNameOverride
+var resolvedUamiName = empty(userAssignedIdentityNameOverride) ? toLower('${namePrefix}-uai-${uniqueString(resourceGroupId)}') : userAssignedIdentityNameOverride
+var resolvedLawName = empty(logAnalyticsWorkspaceNameOverride) ? toLower('${namePrefix}-law-${uniqueString(resourceGroupId)}') : logAnalyticsWorkspaceNameOverride
+var resolvedAppiName = empty(appInsightsNameOverride) ? toLower('${namePrefix}-appi-${uniqueString(resourceGroupId)}') : appInsightsNameOverride
+var resolvedAmplsName = empty(amplsNameOverride) ? toLower('${namePrefix}-ampls-${uniqueString(resourceGroupId)}') : amplsNameOverride
+var resolvedStorageName = empty(storageAccountNameOverride) ? (length(defaultStorageName) > 24 ? substring(defaultStorageName, 0, 24) : defaultStorageName) : storageAccountNameOverride
+var resolvedCosmosName = empty(cosmosAccountNameOverride) ? toLower('${namePrefix}-cosmosdb-${uniqueString(resourceGroup().id)}') : cosmosAccountNameOverride
+var resolvedAcrName = empty(containerRegistryNameOverride) ? toLower('${namePrefix}acr${uniqueString(resourceGroupId)}') : containerRegistryNameOverride
+var resolvedAspName = empty(appServicePlanNameOverride) ? toLower('${namePrefix}-asp-${uniqueString(resourceGroupId)}') : appServicePlanNameOverride
+var resolvedAiFoundryBaseName = empty(aiFoundryBaseNameOverride) ? substring(toLower(uniqueString('ai-${namePrefix}-${environment}-${resourceGroup().id}')), 0, 12) : aiFoundryBaseNameOverride
+
 // ################################################
 // Networking (VNet + Private DNS) — deployed first when isPrivate=true
 
 module network 'modules/network.bicep' = if (isPrivate) {
   name: 'networkDeployment.${shortHash}'
   params: {
-    vnetName: toLower('${namePrefix}-vnet-${uniqueString(resourceGroupId)}')
+    vnetName: resolvedVnetName
     vnetAddressPrefix: vnetAddressPrefix
     location: location
     tags: tags
@@ -89,7 +127,7 @@ module privateDns 'modules/private-dns.bicep' = if (isPrivate) {
 module userAssignedIdentity 'modules/user-assigned-identity.bicep' = {
   name: 'userAssignedIdentityDeployment.${shortHash}'
   params: {
-    userAssignedIdentityName: toLower('${namePrefix}-uai-${uniqueString(resourceGroupId)}')
+    userAssignedIdentityName: resolvedUamiName
     location: location
     tags: tags
   }
@@ -101,7 +139,7 @@ module userAssignedIdentity 'modules/user-assigned-identity.bicep' = {
 module logAnalytics 'modules/log-analytics-ws.bicep' = {
   name: 'logAnalyticsDeployment.${shortHash}'
   params: {
-    logAnalyticsWorkspaceName: toLower('${namePrefix}-law-${uniqueString(resourceGroupId)}')
+    logAnalyticsWorkspaceName: resolvedLawName
     roleAssignedManagedIdentityPrincipalIds: [userAssignedIdentity.outputs.principalId]
     location: location
     tags: tags
@@ -112,7 +150,7 @@ module logAnalytics 'modules/log-analytics-ws.bicep' = {
 module appInsights 'modules/app-insights.bicep' = {
   name: 'appInsightsDeployment.${shortHash}'
   params: {
-    appInsightsName: toLower('${namePrefix}-appi-${uniqueString(resourceGroupId)}')
+    appInsightsName: resolvedAppiName
     location: location
     logAnalyticsResourceId: logAnalytics.outputs.resourceId
     tags: tags
@@ -124,7 +162,7 @@ module appInsights 'modules/app-insights.bicep' = {
 module ampls 'modules/ampls.bicep' = if (isPrivate) {
   name: 'amplsDeployment.${shortHash}'
   params: {
-    name: toLower('${namePrefix}-ampls-${uniqueString(resourceGroupId)}')
+    name: resolvedAmplsName
     logAnalyticsResourceId: logAnalytics.outputs.resourceId
     appInsightsResourceId: appInsights.outputs.resourceId
     privateEndpointSubnetId: network.outputs.peSubnetId
@@ -146,7 +184,7 @@ module ampls 'modules/ampls.bicep' = if (isPrivate) {
 module storage 'modules/storage.bicep' = {
   name: 'storageAccountDeployment.${shortHash}'
   params: {
-    storageAccountName: length('${namePrefix}sta${uniqueString(resourceGroupId)}') > 24 ? substring(toLower('${namePrefix}sta${uniqueString(resourceGroupId)}'), 0, 24) : toLower('${namePrefix}sta${uniqueString(resourceGroupId)}')
+    storageAccountName: resolvedStorageName
     location: location
     docsContainerName: docsContainerName
     roleAssignedManagedIdentityPrincipalIds: [userAssignedIdentity.outputs.principalId]
@@ -164,7 +202,7 @@ module cosmosDb 'modules/cosmos-db.bicep' = {
   name: 'cosmosDbDeployment.${shortHash}'
   params: {
     location: location
-    cosmosAccountName: toLower('${namePrefix}-cosmosdb-${uniqueString(resourceGroup().id)}')
+    cosmosAccountName: resolvedCosmosName
     cosmosDbName: cosmosDbName
     cosmosDBContainerNames: cosmosDBContainerNames
     cosmosDBDataContributorPrincipalIds: [userAssignedIdentity.outputs.principalId, deployer().objectId]
@@ -182,7 +220,7 @@ module cosmosDb 'modules/cosmos-db.bicep' = {
 module containerRegistry 'modules/container-registry.bicep' = {
   name: 'containerRegistryDeployment.${shortHash}'
   params: {
-    containerRegistryName: toLower('${namePrefix}acr${uniqueString(resourceGroupId)}')
+    containerRegistryName: resolvedAcrName
     location: location
     roleAssignedManagedIdentityPrincipalIds: [userAssignedIdentity.outputs.principalId]
     tags: tags
@@ -201,7 +239,7 @@ module containerRegistry 'modules/container-registry.bicep' = {
 module appServicePlan 'modules/app-service-plan.bicep' = {
   name: 'appServicePlanDeployment.${shortHash}'
   params: {
-    name: toLower('${namePrefix}-asp-${uniqueString(resourceGroupId)}')
+    name: resolvedAspName
     location: location
     tags: tags
   }
@@ -217,7 +255,7 @@ module appServicePlan 'modules/app-service-plan.bicep' = {
 module aiFoundry 'modules/ai-foundry.bicep' = {
   name: 'aiFoundryDeployment.${shortHash}'
   params: {
-    aiFoundryBaseName: substring(toLower(uniqueString('ai-${namePrefix}-${environment}-${resourceGroup().id}')), 0, 12)
+    aiFoundryBaseName: resolvedAiFoundryBaseName
     roleAssignedManagedIdentityPrincipalIds: [userAssignedIdentity.outputs.principalId]
     location: aiFoundryLocation
     tags: tags
@@ -225,48 +263,6 @@ module aiFoundry 'modules/ai-foundry.bicep' = {
     openAiPrivateDnsZoneId: isPrivate ? privateDns.outputs.openAiZoneId : ''
     cognitiveServicesPrivateDnsZoneId: isPrivate ? privateDns.outputs.cognitiveServicesZoneId : ''
     aiServicesPrivateDnsZoneId: isPrivate ? privateDns.outputs.aiServicesZoneId : ''
-  }
-}
-
-// ################################################
-// Operator access plane — Bastion + Jumpbox
-
-module bastion 'modules/bastion.bicep' = if (isPrivate && deployJumpbox) {
-  name: 'bastionDeployment.${shortHash}'
-  params: {
-    name: toLower('${namePrefix}-bastion-${uniqueString(resourceGroupId)}')
-    location: location
-    subnetId: network.outputs.bastionSubnetId
-    sku: bastionSku
-    tags: tags
-  }
-}
-
-module jumpbox 'modules/jumpbox.bicep' = if (isPrivate && deployJumpbox) {
-  name: 'jumpboxDeployment.${shortHash}'
-  params: {
-    name: toLower('${namePrefix}-jump-${uniqueString(resourceGroupId)}')
-    location: location
-    subnetId: network.outputs.jumpboxSubnetId
-    adminUsername: jumpboxAdminUsername
-    adminPassword: jumpboxAdminPassword
-    userAssignedIdentityId: userAssignedIdentity.outputs.resourceId
-    tags: tags
-  }
-}
-
-var uaiName = toLower('${namePrefix}-uai-${uniqueString(resourceGroupId)}')
-
-// Grant the jumpbox identity the roles needed to run scripts end-to-end.
-// UAMI already has AcrPull/AcrPush/AcrDelete + Storage + Cosmos data roles;
-// add Contributor scoped to the resource group so it can deploy container apps.
-resource jumpboxRgContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (isPrivate && deployJumpbox) {
-  name: guid(resourceGroup().id, uaiName, 'b24988ac-6180-42a0-ab88-20f7382dd24c')
-  scope: resourceGroup()
-  properties: {
-    principalId: userAssignedIdentity.outputs.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b24988ac-6180-42a0-ab88-20f7382dd24c') // Contributor
   }
 }
 
@@ -292,5 +288,3 @@ output aiProjectName string = aiFoundry.outputs.aiProjectName
 output aiServicesName string = aiFoundry.outputs.aiServicesName
 output isPrivate bool = isPrivate
 output vnetId string = isPrivate ? network.outputs.vnetId : ''
-output jumpboxName string = (isPrivate && deployJumpbox) ? jumpbox.outputs.vmName : ''
-output bastionName string = (isPrivate && deployJumpbox) ? bastion.outputs.bastionName : ''

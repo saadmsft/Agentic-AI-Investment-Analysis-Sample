@@ -1,12 +1,12 @@
 # Private (Zero-Trust) Deployment Guide
 
-This guide documents **everything you need to deploy, operate, and customize the Agentic AI Investment Analysis sample in its private / zero-trust topology** (`isPrivate=true`). It is the companion to:
+This guide documents how to deploy, operate, and customize the Agentic AI Investment Analysis sample in its private / zero-trust topology (`isPrivate=true`). It is the companion to:
 
 - [`_assets/ZERO_TRUST_ARCHITECTURE.md`](../_assets/ZERO_TRUST_ARCHITECTURE.md) — logical view of the topology
 - [`infra/bicep/main.bicep`](../infra/bicep/main.bicep) — the Bicep template that provisions everything below
 - [`infra/bicep/main.json`](../infra/bicep/main.json) — the compiled ARM template used by the **Deploy to Azure** button
 
-> **TL;DR** — In private mode, every PaaS data plane is reached through a Private Endpoint inside a customer-owned VNet. The only public surface is the Azure Bastion control-plane TLS endpoint used by operators. No public DNS records exist for any workload.
+> **TL;DR** — In private mode, every PaaS data plane is reached through a Private Endpoint inside a customer-owned VNet. **There is no public ingress on the workload — no Bastion and no jumpbox.** Operators are expected to deploy and reach the apps from the customer's own peered network (ExpressRoute, VPN, or hub VNet). No public DNS records exist for any workload.
 
 ---
 
@@ -18,10 +18,10 @@ This guide documents **everything you need to deploy, operate, and customize the
 
 | Plane         | Components                                                                                               | Public exposure                |
 | ------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------ |
-| Operator      | Azure Bastion (Standard) → Windows jumpbox (no public IP)                                                | Bastion TLS 443 only           |
+| Operator      | Customer-managed peering (ExpressRoute / VPN / hub VNet) — no IP provisioned by this template            | None                           |
 | Workload      | App Service Plan (Linux P0v3) hosting `api` + `web` Web Apps for Containers, ingress disabled publicly   | None                           |
 | Data          | Cosmos DB (NoSQL), Storage Account (Blob), Azure AI Foundry / OpenAI, Azure Container Registry (Premium) | `publicNetworkAccess=Disabled` |
-| Identity      | One User-Assigned Managed Identity (UAMI) federated to apps + jumpbox                                    | n/a                            |
+| Identity      | One User-Assigned Managed Identity (UAMI) federated to both apps                                         | n/a                            |
 | Observability | Log Analytics + Application Insights joined to an Azure Monitor Private Link Scope (AMPLS)               | None                           |
 | DNS           | Customer-owned Private DNS zones linked to the VNet                                                      | n/a                            |
 
@@ -36,18 +36,14 @@ All parameters are defined in [`infra/bicep/main.bicep`](../infra/bicep/main.bic
 | ------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | `namePrefix`        | `invstdemo`             | Lowercase prefix for every generated resource name. Keep ≤ 8 chars to stay within Storage / ACR limits.             |
 | `environment`       | `dev`                   | Free-form environment tag (`dev` / `staging` / `prod`). `prod` enables Cosmos DB zone redundancy.                   |
-| `location`          | resource group location | Region for VNet, ACA-replacement App Service Plan, Cosmos, Storage, ACR, Bastion, AMPLS.                            |
+| `location`          | resource group location | Region for VNet, App Service Plan, Cosmos, Storage, ACR, AMPLS.                                                     |
 | `aiFoundryLocation` | resource group location | Region for Azure AI Foundry / model deployment. Use a region with model capacity (e.g. `swedencentral`, `eastus2`). |
 
 ### Networking & zero-trust
-| Parameter               | Default           | Description                                                                                                                   |
-| ----------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `isPrivate`             | `true`            | Master switch. `true` = full private deployment (everything in this doc). `false` = legacy public demo, no VNet, no PEs.      |
-| `vnetAddressPrefix`     | `10.50.0.0/16`    | CIDR for the VNet. Must accommodate every subnet listed in §4.                                                                |
-| `deployJumpbox`         | `true`            | When `true` (and `isPrivate=true`), provisions the Windows jumpbox + Bastion.                                                 |
-| `jumpboxAdminUsername`  | `azureuser`       | Local admin user on the jumpbox.                                                                                              |
-| `jumpboxAdminPassword`  | _(empty, secure)_ | **Required when `deployJumpbox=true`**. Windows admin password (12–123 chars; 3 of: lowercase/uppercase/digit/special).         |
-| `bastionSku`            | `Standard`        | `Standard` is required for native-client RDP tunneling used by [`infra/0-connect-jumpbox.sh`](../infra/0-connect-jumpbox.sh). |
+| Parameter           | Default      | Description                                                                                                                                                                                                                                            |
+| ------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `isPrivate`         | `true`       | Master switch. `true` = full private deployment. `false` = legacy public demo, no VNet, no PEs.                                                                                                                                                        |
+| `vnetAddressPrefix` | **required** | CIDR for the workload VNet. **Must be a `/26`** supplied by the customer (e.g. `10.123.45.0/26`). The template splits it into two equal `/27` subnets via `cidrSubnet()` — see §4. Required even when `isPrivate=false` (a placeholder is acceptable). |
 
 ### Application
 | Parameter           | Default                         | Description                                                                             |
@@ -63,9 +59,9 @@ Each module in [`infra/bicep/modules/`](../infra/bicep/modules/) is conditional 
 
 | Module                         | Resource                                                               | Public access                                                     | Auth model                                |
 | ------------------------------ | ---------------------------------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------- |
-| `network.bicep` *              | VNet + 6 subnets + NSGs                                                | n/a                                                               | n/a                                       |
+| `network.bicep` *              | VNet (`/26`) + 2 subnets + NSGs                                        | n/a                                                               | n/a                                       |
 | `private-dns.bicep` *          | 12 Private DNS zones, all VNet-linked                                  | n/a                                                               | n/a                                       |
-| `user-assigned-identity.bicep` | One UAMI                                                               | n/a                                                               | Federated to apps + jumpbox               |
+| `user-assigned-identity.bicep` | One UAMI                                                               | n/a                                                               | Federated to both Web Apps                |
 | `log-analytics-ws.bicep`       | Log Analytics workspace                                                | `disableLocalAuth=true`                                           | Entra ID + AMPLS                          |
 | `app-insights.bicep`           | Application Insights (workspace-based)                                 | `disableLocalAuth=true`                                           | Entra ID + AMPLS                          |
 | `ampls.bicep` *                | Azure Monitor Private Link Scope                                       | `PrivateOnly` ingestion + query                                   | n/a                                       |
@@ -75,32 +71,26 @@ Each module in [`infra/bicep/modules/`](../infra/bicep/modules/) is conditional 
 | `app-service-plan.bicep`       | Linux App Service Plan (P0v3)                                          | n/a                                                               | n/a                                       |
 | `web-app-container.bicep`      | (per app) Web App for Containers + VNet integration + private endpoint | Public ingress disabled                                           | UAMI                                      |
 | `ai-foundry.bicep`             | Azure AI Services + Foundry project + model deployment                 | `publicNetworkAccess=Disabled`                                    | UAMI → Azure AI User                      |
-| `bastion.bicep` *              | Azure Bastion (`Standard`)                                             | TLS 443 only                                                      | Operator Entra ID                         |
-| `jumpbox.bicep` *              | Windows VM, no public IP, UAMI attached, CustomScriptExtension installs az/git/bicep | n/a                                                               | Admin password (Bastion-tunneled RDP)     |
 | `private-endpoint.bicep` *     | Used by every PaaS module above                                        | n/a                                                               | n/a                                       |
 
-> The legacy `container-apps-environment.bicep` is retained on disk for reference but is no longer instantiated — the workload now runs on App Service.
+> Operator access (Bastion + jumpbox) has been removed from this template. Operators must run scripts 2 + 3 from a workstation peered to the workload VNet.
 
 ---
 
 ## 4. Subnet layout
 
-Defined in [`infra/bicep/modules/network.bicep`](../infra/bicep/modules/network.bicep). Default sizes given for `vnetAddressPrefix=10.50.0.0/16`:
+Defined in [`infra/bicep/modules/network.bicep`](../infra/bicep/modules/network.bicep). The customer supplies a single **/26** (64 IPs). The module splits it into two equal **/27** subnets using `cidrSubnet(vnetAddressPrefix, 27, n)`:
 
-| Subnet               | CIDR | Purpose                                                                   | Delegation / Service endpoints                                                        |
-| -------------------- | ---- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `snet-appsvc`        | /23  | App Service VNet integration                                              | Delegated `Microsoft.Web/serverFarms`, `Microsoft.CognitiveServices` service endpoint |
-| `snet-pe`            | /26  | All Private Endpoints (ACR, Cosmos, Blob, AI Foundry, AMPLS, App Service) | None                                                                                  |
-| `snet-jumpbox`       | /27  | Jumpbox NIC (no public IP)                                                | None                                                                                  |
-| `AzureBastionSubnet` | /26  | Required name for Azure Bastion                                           | None                                                                                  |
-| `snet-build`         | /27  | Reserved — ACR Tasks / private build agents                               | None                                                                                  |
-| `snet-mgmt`          | /27  | Reserved — self-hosted CI/CD runners                                      | None                                                                                  |
+| Subnet          | Offset within /26 | CIDR example (`10.123.45.0/26`) | Purpose                                                                           | Delegation / Service endpoints                                                        |
+| --------------- | ----------------- | ------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `snet-services` | 0 (first /27)     | `10.123.45.0/27`                | App Service VNet integration — all outbound calls from the API/Web apps           | Delegated `Microsoft.Web/serverFarms`, `Microsoft.CognitiveServices` service endpoint |
+| `snet-pe`       | 32 (second /27)   | `10.123.45.32/27`               | All Private Endpoints (App Service inbound, ACR, Cosmos, Blob, AI Foundry, AMPLS) | None — `privateEndpointNetworkPolicies=Disabled`                                      |
 
-**NSG posture (deny-by-default with explicit allows):**
-- `nsg-pe`: allow VNet→VNet TCP 443
-- `nsg-jumpbox`: allow VNet TCP 3389 (Bastion only)
-- `nsg-bastion`: full Bastion ruleset per Microsoft docs (HTTPS in, GatewayManager, Load Balancer, SSH/RDP out, AzureCloud:443 out)
-- `nsg-aca` (legacy, kept empty): platform-managed when ACA was used
+**NSG posture:**
+- `nsg-pe`: allow `VirtualNetwork → VirtualNetwork` TCP 443
+- `nsg-services`: empty (permissive within VNet; App Service regional VNet integration manages its own outbound traffic)
+
+**Sizing caveat.** /27 yields ~27 usable IPs per subnet. The App Service VNet integration subnet needs roughly 2× the worst-case instance count of the plan. If you expect autoscale beyond ~10 instances per plan, ask the customer for a larger CIDR (a `/25` would let you give each subnet a `/26`).
 
 ---
 
@@ -123,6 +113,8 @@ Defined in [`infra/bicep/modules/private-dns.bicep`](../infra/bicep/modules/priv
 | `privatelink.agentsvc.azure-automation.net` | Monitor agents                                        |
 | `privatelink.azurewebsites.net`             | App Service / Web App                                 |
 
+> **Resolving private FQDNs from your peered network** — make sure the customer's on-prem DNS forwards `privatelink.*` zones to Azure DNS (`168.63.129.16`) over the peering, or replicate the zones in the customer's hub. Without this, your workstation will keep resolving public IPs and fail to reach the private endpoints.
+
 ---
 
 ## 6. Cosmos DB containers
@@ -144,18 +136,17 @@ Local auth is disabled — the deployer principal **and** the workload UAMI are 
 
 ## 7. Identity & RBAC
 
-A single User-Assigned Managed Identity is the workload identity for both Web Apps and the jumpbox. Role assignments are issued by the individual modules:
+A single User-Assigned Managed Identity is the workload identity for both Web Apps. Role assignments are issued by the individual modules:
 
-| Scope                    | Role                                                    | Why                                                                           |
-| ------------------------ | ------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| ACR                      | `AcrPull`, `AcrPush`, `AcrDelete`                       | Image pull from App Service + push from jumpbox                               |
-| Storage account          | `Storage Blob Data Contributor`                         | Document upload / read by API app                                             |
-| Cosmos DB account        | `Cosmos DB Built-in Data Contributor`                   | Plane-of-data CRUD without keys                                               |
-| AI Foundry / AI Services | `Azure AI User`, `Cognitive Services OpenAI User`       | Calling deployed model                                                        |
-| Resource group           | `Contributor` (jumpbox only, when `deployJumpbox=true`) | Lets `2-build-and-push-images.sh` and `3-deploy-apps.sh` run from the jumpbox |
-| Log Analytics            | `Log Analytics Contributor`                             | Telemetry write                                                               |
+| Scope                    | Role                                              | Why                               |
+| ------------------------ | ------------------------------------------------- | --------------------------------- |
+| ACR                      | `AcrPull`, `AcrPush`, `AcrDelete`                 | Image pull from App Service       |
+| Storage account          | `Storage Blob Data Contributor`                   | Document upload / read by API app |
+| Cosmos DB account        | `Cosmos DB Built-in Data Contributor`             | Plane-of-data CRUD without keys   |
+| AI Foundry / AI Services | `Azure AI User`, `Cognitive Services OpenAI User` | Calling deployed model            |
+| Log Analytics            | `Log Analytics Contributor`                       | Telemetry write                   |
 
-The deployer (`deployer().objectId` in `main.bicep`) is added as a Cosmos data contributor as well, so you can run the FastAPI server from your laptop against the deployed Cosmos when you punch a temporary firewall hole or run from the jumpbox.
+The deployer (`deployer().objectId` in `main.bicep`) is also added as a Cosmos data contributor so you can run the FastAPI server from your workstation (over peering) against the deployed Cosmos.
 
 ---
 
@@ -182,67 +173,58 @@ Every setting is environment-driven; the same container image runs in either pub
 
 ## 9. Deployment workflow
 
-### Option A — Azure Portal one-click
-Use the **Deploy to Azure** button in the [root README](../README.md#-one-click-azure-deployment). The portal wizard collects the parameters from §2 and then provisions everything in §3. After it completes, jump to §10 to push images and roll out apps.
+### Prerequisites
 
-### Option B — CLI (recommended for end-to-end automation)
+1. **A /26 CIDR** allocated by the customer's network team, not overlapping with any peered range.
+2. **VNet peering already in place** (or planned to be set up before scripts 2 + 3 run) so that:
+   - DNS for `privatelink.*` zones resolves to Azure DNS from your workstation.
+   - TCP 443 reaches the workload's private endpoints (ACR, App Service).
+3. Azure CLI ≥ 2.61, Docker (if using local builds), and the right Entra ID role assignments (`Contributor` + `User Access Administrator` on the target RG).
+
+### Option A — Azure Portal one-click
+Use the **Deploy to Azure** button in the [root README](../README.md#-one-click-azure-deployment). The portal wizard collects the parameters from §2 — including `vnetAddressPrefix` — and then provisions everything in §3. After it completes, jump to §10 to push images and roll out apps from your peered workstation.
+
+### Option B — CLI
 
 ```bash
-# 1. Provision infrastructure (VNet, PEs, AI Foundry, jumpbox, …)
+# 1. Provision infrastructure (VNet, PEs, AI Foundry, App Service Plan, …)
 ./infra/1-deploy-azure-infra.sh \
     -g <resource-group> \
     -l swedencentral \
     -p invstdemo \
     -e dev \
-    --admin-password '<Strong!Passw0rd>'
+    --vnet-address-prefix 10.123.45.0/26
 
-# 2. Open an RDP tunnel into the Windows jumpbox via Bastion
-./infra/0-connect-jumpbox.sh -g <resource-group>
+# 2. From a workstation peered to the workload VNet — build & push images
+./infra/2-build-and-push-images.sh -r <acr>.azurecr.io
 
-# On the jumpbox (PowerShell):
-#   The deployment auto-clones the repo to C:\Users\Public\Desktop.
-cd C:\Users\Public\Desktop\Agentic-AI-Investment-Analysis-Sample
-
-# 3. Build & push container images to the private ACR (uses UAMI on the jumpbox)
-bash infra/2-build-and-push-images.sh -g <resource-group>
-
-# 4. Roll out / update the api + web Web Apps
-bash infra/3-deploy-apps.sh -g <resource-group>
+# 3. Roll out / update the api + web Web Apps
+./infra/3-deploy-apps.sh -g <resource-group>
 ```
 
 Flags accepted by `1-deploy-azure-infra.sh`:
 
-| Flag                              | Description                                              |
-| --------------------------------- | -------------------------------------------------------- |
-| `-g, --resource-group`            | **Required** target resource group                       |
-| `-l, --location`                  | Region (default `westus2`)                               |
-| `-a, --ai-foundry-location`       | AI Foundry region (default `swedencentral`)              |
-| `-p, --name-prefix`               | Resource name prefix (default `aiinvest`)                |
-| `-e, --environment`               | Environment tag                                          |
-| `--public`                        | Deploy the legacy public topology (`isPrivate=false`)    |
-| `--no-jumpbox`                    | Skip jumpbox + Bastion                                   |
-| `--ssh-key-file <path>`           | _Deprecated_ — the jumpbox is now Windows. Use `--admin-password`. |
-| `--admin-password <pwd>`          | Windows admin password for the jumpbox (12–123 chars; complexity rules apply). Prompted interactively if omitted. |
-| `--bastion-sku <Basic\|Standard>` | Default `Standard`                                       |
-| `-d, --debug`                     | Enable Azure CLI debug logging                           |
+| Flag                        | Description                                                             |
+| --------------------------- | ----------------------------------------------------------------------- |
+| `-g, --resource-group`      | **Required** target resource group                                      |
+| `--vnet-address-prefix`     | **Required** — `/26` CIDR for the workload VNet (e.g. `10.123.45.0/26`) |
+| `-l, --location`            | Region (default `westus2`)                                              |
+| `-a, --ai-foundry-location` | AI Foundry region (default `swedencentral`)                             |
+| `-p, --name-prefix`         | Resource name prefix (default `aiinvest`)                               |
+| `-e, --environment`         | Environment tag                                                         |
+| `--public`                  | Deploy the legacy public topology (`isPrivate=false`)                   |
+| `-d, --debug`               | Enable Azure CLI debug logging                                          |
 
-> **Why scripts 2 + 3 must run from the jumpbox in private mode:** ACR is `publicNetworkAccess=Disabled`, so `docker push` and the Web App rollout APIs are only reachable from inside the VNet.
+> **Why scripts 2 + 3 must run from a peered host:** ACR and App Service are `publicNetworkAccess=Disabled`, so `docker push` and the Web App rollout APIs are only reachable from inside the VNet.
 
 ---
 
 ## 10. Operating the deployment
 
 ### Connecting
-```bash
-./infra/0-connect-jumpbox.sh -g <resource-group>
-```
-Internally this runs `az network bastion rdp` (Windows host) or `az network bastion tunnel` to forward localhost:50389 → VM:3389 (macOS/Linux), and requires Bastion **Standard** SKU.
-
-### Reaching the Web app from your laptop
-The Web app has internal-only ingress. To browse it during development, open an additional Bastion tunnel from the jumpbox to the Web app FQDN, or deploy a self-service VPN gateway / Azure Front Door Premium with Private Link in front of it. The sample does **not** ship a VPN gateway — Bastion + jumpbox is the documented path.
-
-### Rotating the jumpbox password
-Re-run `1-deploy-azure-infra.sh --admin-password '<new>'` against the same resource group; the VM admin password is updated in place.
+There is no Bastion and no jumpbox. Reach the workload like any other private app:
+- **Browse the Web app**: from a workstation on the peered network, navigate to `https://<webapp>.azurewebsites.net`. Private DNS forwarding must be in place (see §5).
+- **Run admin commands**: `az` works directly against the resource group from anywhere; data-plane access (Cosmos, Storage, ACR `docker push`) requires the peering.
 
 ### Tearing down
 ```bash
@@ -256,31 +238,30 @@ The Private DNS zones are inside the resource group, so a single group delete is
 
 The same template covers both modes through the `isPrivate` flag:
 
-| Behavior                      | `isPrivate=true`             | `isPrivate=false`                   |
-| ----------------------------- | ---------------------------- | ----------------------------------- |
-| VNet + subnets + NSGs         | ✅ created                    | ❌ skipped                           |
-| Private DNS zones             | ✅ 12 zones, VNet-linked      | ❌ skipped                           |
-| Private endpoints on PaaS     | ✅ on every data service      | ❌ skipped                           |
-| `publicNetworkAccess` on PaaS | `Disabled`                   | `Enabled`                           |
-| Web App ingress               | internal only                | external                            |
-| Jumpbox + Bastion             | optional via `deployJumpbox` | always skipped                      |
-| AMPLS                         | ✅                            | ❌ (telemetry over public ingestion) |
+| Behavior                      | `isPrivate=true`        | `isPrivate=false`                   |
+| ----------------------------- | ----------------------- | ----------------------------------- |
+| VNet + subnets + NSGs         | ✅ created               | ❌ skipped                           |
+| Private DNS zones             | ✅ 12 zones, VNet-linked | ❌ skipped                           |
+| Private endpoints on PaaS     | ✅ on every data service | ❌ skipped                           |
+| `publicNetworkAccess` on PaaS | `Disabled`              | `Enabled`                           |
+| Web App ingress               | private endpoint only   | external                            |
+| AMPLS                         | ✅                       | ❌ (telemetry over public ingestion) |
 
-Use `--public` on `1-deploy-azure-infra.sh`, or pass `isPrivate=false` directly to the bicep template, to switch.
+Use `--public` on `1-deploy-azure-infra.sh`, or pass `isPrivate=false` directly to the Bicep template, to switch. `vnetAddressPrefix` is still required at the parameter level — supply a placeholder such as `10.0.0.0/26` when running public.
 
 ---
 
 ## 12. Troubleshooting
 
-| Symptom                                                                     | Likely cause                                                                 | Fix                                                                                                                                                                                        |
-| --------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `403 PublicNetworkAccess is disabled` from your laptop                      | Trying to reach Cosmos / Storage / ACR from the public internet              | Use the jumpbox or temporarily allow your IP via the resource's networking blade                                                                                                           |
-| `Bastion: target resource id not found`                                     | Bastion SKU is `Basic`                                                       | Redeploy with `--bastion-sku Standard`                                                                                                                                                     |
-| `docker push` fails on the jumpbox with name-resolution error               | Private DNS zone link not yet propagated                                     | Wait 1–2 minutes after `1-deploy-azure-infra.sh` finishes; re-run `nslookup <acr>.azurecr.io`                                                                                              |
-| Web app cold-start fails to pull image                                      | UAMI missing `AcrPull` on ACR                                                | Re-run `1-deploy-azure-infra.sh` (idempotent) — module assigns the role                                                                                                                    |
-| FastAPI returns `401` from Cosmos                                           | Deployer / UAMI not added as Cosmos Data Contributor                         | Verify with `az cosmosdb sql role assignment list -a <cosmos> -g <rg>`                                                                                                                     |
-| `nslookup <appname>.azurewebsites.net` returns a public IP from the jumpbox | Web App private endpoint not yet linked to `privatelink.azurewebsites.net`   | Confirm the zone exists and is VNet-linked; re-run rollout                                                                                                                                 |
-| AI Foundry call fails with `OperationNotAllowed`                            | Region mismatch — AI Services data plane not reachable via the configured PE | Set `aiFoundryLocation` to the same region as the rest of the deployment, or open an outbound `Microsoft.CognitiveServices` service endpoint on `snet-appsvc` (already enabled by default) |
+| Symptom                                                                          | Likely cause                                                                 | Fix                                                                                                                                                                                     |
+| -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `403 PublicNetworkAccess is disabled` from your laptop                           | Trying to reach Cosmos / Storage / ACR from a non-peered network             | Run from a workstation peered to the workload VNet, or temporarily allow your IP via the resource's networking blade                                                                    |
+| `docker push` fails with name-resolution error                                   | Private DNS zone for `privatelink.azurecr.io` not forwarded over the peering | Configure the customer's DNS to forward `privatelink.*` zones to Azure DNS (`168.63.129.16`), or replicate the zones in the customer's hub                                              |
+| Web app cold-start fails to pull image                                           | UAMI missing `AcrPull` on ACR                                                | Re-run `1-deploy-azure-infra.sh` (idempotent) — module assigns the role                                                                                                                 |
+| FastAPI returns `401` from Cosmos                                                | Deployer / UAMI not added as Cosmos Data Contributor                         | Verify with `az cosmosdb sql role assignment list -a <cosmos> -g <rg>`                                                                                                                  |
+| `nslookup <appname>.azurewebsites.net` returns a public IP from your workstation | Web App private DNS zone not reachable from your network                     | See §5 — forward `privatelink.azurewebsites.net` to Azure DNS over the peering                                                                                                          |
+| AI Foundry call fails with `OperationNotAllowed`                                 | Region mismatch — AI Services data plane not reachable via the configured PE | Set `aiFoundryLocation` to the same region as the rest of the deployment, or rely on the `Microsoft.CognitiveServices` service endpoint on `snet-services` (already enabled by default) |
+| Bicep `cidrSubnet` error during deploy                                           | `vnetAddressPrefix` is not a `/26`                                           | Re-run with a `/26` CIDR (the script enforces this; the Bicep `cidrSubnet(..., 27, 1)` call assumes 64 addresses).                                                                      |
 
 ---
 
@@ -290,5 +271,4 @@ Use `--public` on `1-deploy-azure-infra.sh`, or pass `isPrivate=false` directly 
 - [`infra/bicep/main.bicep`](../infra/bicep/main.bicep) — root template (resource-group scope)
 - [`infra/bicep/modules/`](../infra/bicep/modules/) — per-resource modules
 - [`infra/1-deploy-azure-infra.sh`](../infra/1-deploy-azure-infra.sh) — CLI deploy wrapper
-- [`infra/0-connect-jumpbox.sh`](../infra/0-connect-jumpbox.sh) — Bastion RDP tunnel to the Windows jumpbox
-- [`infra/2-build-and-push-images.sh`](../infra/2-build-and-push-images.sh) / [`3-deploy-apps.sh`](../infra/3-deploy-apps.sh) — image + app rollout (run on the jumpbox in private mode)
+- [`infra/2-build-and-push-images.sh`](../infra/2-build-and-push-images.sh) / [`3-deploy-apps.sh`](../infra/3-deploy-apps.sh) — image + app rollout (run from a peered host)

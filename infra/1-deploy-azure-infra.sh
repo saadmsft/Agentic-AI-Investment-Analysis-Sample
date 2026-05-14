@@ -20,16 +20,15 @@ NAME_PREFIX="aiinvest"
 ENVIRONMENT="dev"
 DEBUG="false"
 IS_PRIVATE="true"
-DEPLOY_JUMPBOX="true"
-ADMIN_PASSWORD=""
-BASTION_SKU="Standard"
+VNET_ADDRESS_PREFIX=""
 
 # Function to show usage
 usage() {
-    echo "Usage: $0 -g <resource-group> [options]"
+    echo "Usage: $0 -g <resource-group> --vnet-address-prefix <CIDR/26> [options]"
     echo ""
     echo "Required:"
     echo "  -g, --resource-group       Azure Resource Group name"
+    echo "      --vnet-address-prefix  VNet address space (must be a /26, e.g. 10.123.45.0/26)"
     echo ""
     echo "Optional:"
     echo "  -l, --location             Azure location (default: westus2)"
@@ -37,15 +36,15 @@ usage() {
     echo "  -e, --environment          Environment name (default: dev)"
     echo "  -a, --ai-foundry-location  AI Foundry location (default: swedencentral)"
     echo "  --public                   Deploy the legacy public topology (isPrivate=false)"
-    echo "  --no-jumpbox               Skip jumpbox/Bastion deployment when private"
-    echo "  --admin-password <pwd>     Admin password for the Windows jumpbox VM (12-123 chars; mix of upper/lower/digit/special). If omitted you will be prompted."
-    echo "  --bastion-sku <sku>        Bastion SKU: Basic or Standard (default: Standard)"
     echo "  -d, --debug                Enable debug logging"
     echo "  -h, --help                 Show this help message"
     echo ""
+    echo "Operator access: this template no longer deploys Azure Bastion or a jumpbox VM."
+    echo "Operators are expected to reach the private endpoints from a peered network"
+    echo "(ExpressRoute, VPN, or hub VNet)."
+    echo ""
     echo "Examples:"
-    echo "  $0 -g my-resource-group"
-    echo "  $0 -g my-rg -l westus2 -p myapp -e dev"
+    echo "  $0 -g my-resource-group --vnet-address-prefix 10.123.45.0/26"
     exit 1
 }
 
@@ -74,23 +73,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --public)
             IS_PRIVATE="false"
-            DEPLOY_JUMPBOX="false"
             shift
             ;;
-        --no-jumpbox)
-            DEPLOY_JUMPBOX="false"
-            shift
-            ;;
-        --ssh-key-file)
-            echo -e "${YELLOW}⚠️  --ssh-key-file is deprecated; the jumpbox is now Windows. Use --admin-password instead.${NC}"
-            shift 2
-            ;;
-        --admin-password)
-            ADMIN_PASSWORD="$2"
-            shift 2
-            ;;
-        --bastion-sku)
-            BASTION_SKU="$2"
+        --vnet-address-prefix)
+            VNET_ADDRESS_PREFIX="$2"
             shift 2
             ;;
         -d|--debug)
@@ -111,6 +97,16 @@ done
 if [ -z "$RESOURCE_GROUP" ]; then
     echo -e "${RED}❌ Error: Resource Group is required${NC}"
     usage
+fi
+
+if [ -z "$VNET_ADDRESS_PREFIX" ]; then
+    echo -e "${RED}❌ Error: --vnet-address-prefix is required (must be a /26, e.g. 10.123.45.0/26)${NC}"
+    usage
+fi
+
+if [[ "$VNET_ADDRESS_PREFIX" != */26 ]]; then
+    echo -e "${RED}❌ Error: --vnet-address-prefix must end in /26 (got: $VNET_ADDRESS_PREFIX)${NC}"
+    exit 1
 fi
 
 echo -e "${BLUE}🚀 Starting Azure deployment for Doc Processing Solution${NC}"
@@ -168,30 +164,6 @@ fi
 echo -e "${BLUE}🏗️ Deploying Azure infrastructure...${NC}"
 DEPLOYMENT_NAME="ai-invest-sample-$(date +%s)"
 
-# Resolve Windows jumpbox admin password (required when deploying the jumpbox)
-JUMPBOX_PASSWORD=""
-if [ "$IS_PRIVATE" == "true" ] && [ "$DEPLOY_JUMPBOX" == "true" ]; then
-    if [ -z "$ADMIN_PASSWORD" ]; then
-        echo -e "${YELLOW}🔐 Enter an admin password for the Windows jumpbox VM.${NC}"
-        echo -e "${YELLOW}   Must be 12-123 chars and include 3 of: lowercase, uppercase, digit, special.${NC}"
-        read -r -s -p "Admin password: " ADMIN_PASSWORD
-        echo
-        read -r -s -p "Confirm password: " ADMIN_PASSWORD_CONFIRM
-        echo
-        if [ "$ADMIN_PASSWORD" != "$ADMIN_PASSWORD_CONFIRM" ]; then
-            echo -e "${RED}❌ Passwords do not match.${NC}"
-            exit 1
-        fi
-    fi
-    if [ ${#ADMIN_PASSWORD} -lt 12 ]; then
-        echo -e "${RED}❌ Admin password must be at least 12 characters.${NC}"
-        echo -e "${YELLOW}   Re-run with --admin-password '<value>' or --no-jumpbox / --public to skip.${NC}"
-        exit 1
-    fi
-    JUMPBOX_PASSWORD="$ADMIN_PASSWORD"
-    echo -e "${GREEN}✅ Using provided admin password for Windows jumpbox${NC}"
-fi
-
 optional_args=()
 
 if [ "$DEBUG" == "true" ]; then
@@ -207,9 +179,7 @@ az deployment group create \
         location="$LOCATION" \
         aiFoundryLocation="$AIFOUNDRY_LOCATION" \
         isPrivate="$IS_PRIVATE" \
-        deployJumpbox="$DEPLOY_JUMPBOX" \
-        bastionSku="$BASTION_SKU" \
-        jumpboxAdminPassword="$JUMPBOX_PASSWORD" \
+        vnetAddressPrefix="$VNET_ADDRESS_PREFIX" \
     --name "$DEPLOYMENT_NAME" \
     --output table ${optional_args[@]}
 
@@ -217,14 +187,14 @@ az deployment group create \
 if [ $? -eq 0 ]; then
     echo ""
     echo -e "${GREEN}✅ Infrastructure deployed successfully${NC}"
-    
+
     # Get deployment outputs
     ACR_LOGIN_SERVER=$(az deployment group show \
         --resource-group "$RESOURCE_GROUP" \
         --name "$DEPLOYMENT_NAME" \
         --query "properties.outputs.containerRegistryLoginServer.value" \
         --output tsv)
-    
+
     CONTAINER_APPS_ENV_ID=$(az deployment group show \
         --resource-group "$RESOURCE_GROUP" \
         --name "$DEPLOYMENT_NAME" \
@@ -236,12 +206,12 @@ if [ $? -eq 0 ]; then
     #     --name "$DEPLOYMENT_NAME" \
     #     --query "properties.outputs.appConfigStoreEndpoint.value" \
     #     --output tsv)
-        
+
     echo -e "${GREEN}Container Registry: $ACR_LOGIN_SERVER${NC}"
     echo -e "${GREEN}Container Apps Environment: $(basename "$CONTAINER_APPS_ENV_ID")${NC}"
     # echo -e "${GREEN}App Configuration Store Endpoint: $APP_CONFIG_STORE_ENDPOINT${NC}"
     echo ""
-    
+
 else
     echo -e "${RED}❌ Infrastructure deployment failed${NC}"
     exit 1
@@ -251,14 +221,14 @@ echo ""
 echo -e "${GREEN}🎉 Azure infrastructure deployment completed!${NC}"
 echo ""
 if [ "$IS_PRIVATE" == "true" ]; then
-  echo -e "${YELLOW}⚠️  Zero-trust mode: ACR and Container Apps are now private.${NC}"
-  echo -e "${YELLOW}    Scripts 2 and 3 must be run from inside the VNet (use the jumpbox).${NC}"
+  echo -e "${YELLOW}⚠️  Zero-trust mode: ACR and App Service are private.${NC}"
+  echo -e "${YELLOW}    Scripts 2 and 3 must be run from a host with line-of-sight to the${NC}"
+  echo -e "${YELLOW}    private endpoints (peered VNet via ExpressRoute / VPN / hub VNet).${NC}"
   echo -e "${BLUE}Next Steps:${NC}"
-  echo "1. Connect to the jumpbox via Azure Bastion:"
-  echo "   ./infra/0-connect-jumpbox.sh -g $RESOURCE_GROUP"
-  echo ""
-  echo "2. On the jumpbox: clone the repo, then run:"
+  echo "1. From a peered host, build and push images to the private ACR:"
   echo "   ./infra/2-build-and-push-images.sh -r $ACR_LOGIN_SERVER"
+  echo ""
+  echo "2. Deploy the apps:"
   echo "   ./infra/3-deploy-apps.sh -g $RESOURCE_GROUP"
 else
   echo -e "${BLUE}Next Steps:${NC}"

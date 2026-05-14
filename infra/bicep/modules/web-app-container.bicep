@@ -1,6 +1,6 @@
 // Linux Web App for Containers with:
 //   * UAMI for ACR pull
-//   * Regional VNet integration (outbound) into snet-appsvc
+//   * Regional VNet integration (outbound) into snet-services
 //   * Private endpoint in snet-pe (inbound) when isPrivate=true
 //   * publicNetworkAccess=Disabled when isPrivate=true
 //
@@ -77,22 +77,24 @@ var baseAppSettings = [
 // When VNet-integrated, we want all outbound traffic (including DNS lookups
 // to private endpoints) to traverse the integrated VNet so private DNS zones
 // resolve correctly.
-var vnetRouteAppSettings = empty(vnetIntegrationSubnetId) ? [] : [
-  {
-    name: 'WEBSITE_VNET_ROUTE_ALL'
-    value: '1'
-  }
-  {
-    name: 'WEBSITE_DNS_SERVER'
-    value: '168.63.129.16'
-  }
-  {
-    // Pull container image from ACR through the integrated VNet so that
-    // private-endpoint-only registries (publicNetworkAccess=Disabled) work.
-    name: 'WEBSITE_PULL_IMAGE_OVER_VNET'
-    value: 'true'
-  }
-]
+var vnetRouteAppSettings = empty(vnetIntegrationSubnetId)
+  ? []
+  : [
+      {
+        name: 'WEBSITE_VNET_ROUTE_ALL'
+        value: '1'
+      }
+      {
+        name: 'WEBSITE_DNS_SERVER'
+        value: '168.63.129.16'
+      }
+      {
+        // Pull container image from ACR through the integrated VNet so that
+        // private-endpoint-only registries (publicNetworkAccess=Disabled) work.
+        name: 'WEBSITE_PULL_IMAGE_OVER_VNET'
+        value: 'true'
+      }
+    ]
 
 resource site 'Microsoft.Web/sites@2024-04-01' = {
   name: name
@@ -140,7 +142,7 @@ resource pe 'Microsoft.Network/privateEndpoints@2024-05-01' = if (isPrivate) {
         name: '${name}-pe-conn'
         properties: {
           privateLinkServiceId: site.id
-          groupIds: [ 'sites' ]
+          groupIds: ['sites']
         }
       }
     ]

@@ -1,26 +1,29 @@
 """Private architecture diagram for the AI Investment Analysis sample.
 
-All resources live in a hub VNet (10.50.0.0/22). Inbound from the internet is
-disabled on every PaaS resource. Operator access is via Bastion -> jumpbox ->
-SOCKS5 proxy. App-to-PaaS traffic stays on the Microsoft backbone via private
+All resources live in a workload VNet sized to a customer-supplied /26. The
+VNet is split into two /27 subnets: snet-services (App Service VNet integration)
+and snet-pe (private endpoints). Inbound from the internet is disabled on every
+PaaS resource. Operator access comes from the customer's peered network
+(ExpressRoute / VPN / hub VNet) -- this template provisions no Bastion and no
+jumpbox. App-to-PaaS traffic stays on the Microsoft backbone via private
 endpoints; the App Service VNet integration subnet reaches AI Foundry through
 a service endpoint with a deny-all networkAcl.
 """
 
-from diagrams import Diagram, Cluster, Edge
-from diagrams.azure.compute import AppServices, ContainerRegistries, VM
-from diagrams.azure.network import (
-    VirtualNetworks,
-    Subnets,
-    PrivateEndpoint,
-    DNSPrivateZones,
-)
+from diagrams import Cluster, Diagram, Edge
+from diagrams.azure.compute import AppServices, ContainerRegistries
 from diagrams.azure.database import CosmosDb
-from diagrams.azure.storage import BlobStorage
+from diagrams.azure.general import Subscriptions
 from diagrams.azure.identity import ManagedIdentities
 from diagrams.azure.ml import CognitiveServices
-from diagrams.azure.monitor import LogAnalyticsWorkspaces, ApplicationInsights
-from diagrams.azure.general import Subscriptions
+from diagrams.azure.monitor import ApplicationInsights, LogAnalyticsWorkspaces
+from diagrams.azure.network import (
+    DNSPrivateZones,
+    PrivateEndpoint,
+    Subnets,
+    VirtualNetworks,
+)
+from diagrams.azure.storage import BlobStorage
 from diagrams.onprem.client import User
 from diagrams.onprem.compute import Server
 
@@ -63,36 +66,28 @@ with Diagram(
     graph_attr=graph_attr,
     node_attr=node_attr,
 ):
+    operator = User("Operator\n(on peered network)")
 
-    operator = User("Operator\n(local Mac)")
-
-    with Cluster("Azure subscription\nc91e40f7-...-2a6bf8402aa4", graph_attr=cluster_style):
-
+    with Cluster("Azure subscription", graph_attr=cluster_style):
         uami = ManagedIdentities("UAMI\nid-aiinvest-...\n(ACR pull)")
 
         with Cluster(
-            "Hub VNet  aiinvest-vnet  10.50.0.0/22",
+            "Workload VNet  aiinvest-vnet\ncustomer-supplied /26",
             graph_attr=vnet_style,
         ):
-
-            # --- Operator entry path ---
-            with Cluster("AzureBastionSubnet", graph_attr=subnet_style):
-                bastion = Subnets("Azure Bastion")
-
-            with Cluster("snet-mgmt  10.50.2.224/27", graph_attr=subnet_style):
-                jumpbox = VM("jumpbox\n(SSH + SOCKS5\n127.0.0.1:1080)")
-
             # --- App Service VNet integration (outbound) ---
             with Cluster(
-                "snet-appsvc  10.50.4.0/26\n"
+                "snet-services  /27 (offset 0)\n"
                 "delegation: Microsoft.Web/serverFarms\n"
                 "serviceEndpoint: Microsoft.CognitiveServices",
                 graph_attr=subnet_style,
             ):
-                vnet_integ = Subnets("VNet integration\n(WEBSITE_VNET_ROUTE_ALL=1\nPULL_IMAGE_OVER_VNET=true)")
+                vnet_integ = Subnets(
+                    "VNet integration\n(WEBSITE_VNET_ROUTE_ALL=1\nPULL_IMAGE_OVER_VNET=true)"
+                )
 
             # --- Private endpoints subnet ---
-            with Cluster("snet-pe  10.50.2.0/26", graph_attr=subnet_style):
+            with Cluster("snet-pe  /27 (offset 32)", graph_attr=subnet_style):
                 pe_api = PrivateEndpoint("PE\naiinvest-api-dev")
                 pe_web = PrivateEndpoint("PE\naiinvest-web-dev")
                 pe_acr = PrivateEndpoint("PE\nACR")
@@ -109,30 +104,50 @@ with Diagram(
             "App Service Plan  P0v3 (Linux)\nplan-aiinvest-...",
             graph_attr=private_paas_style,
         ):
-            api_app = AppServices("aiinvest-api-dev\nDOCKER container\npublic = Disabled")
-            web_app = AppServices("aiinvest-web-dev\nDOCKER container\npublic = Disabled")
+            api_app = AppServices(
+                "aiinvest-api-dev\nDOCKER container\npublic = Disabled"
+            )
+            web_app = AppServices(
+                "aiinvest-web-dev\nDOCKER container\npublic = Disabled"
+            )
 
         # --- Backing PaaS (all private) ---
         with Cluster("Private PaaS dependencies", graph_attr=private_paas_style):
             acr = ContainerRegistries("ACR\naiinvestacr...\npublic = Disabled")
-            cosmos = CosmosDb("Cosmos DB (NoSQL)\naiinvest-cosmosdb-...\npublic = Disabled")
+            cosmos = CosmosDb(
+                "Cosmos DB (NoSQL)\naiinvest-cosmosdb-...\npublic = Disabled"
+            )
             storage = BlobStorage("Storage Account\naiinveststa...\npublic = Disabled")
             ai = CognitiveServices(
-                "AI Foundry / OpenAI\naiiuhsfnmz4b6d4zbsz\npublic = Enabled\nnetworkAcls: Deny\n+ VNet rule (snet-appsvc)"
+                "AI Foundry / OpenAI\naiiuhsfnmz4b6d4zbsz\npublic = Enabled\nnetworkAcls: Deny\n+ VNet rule (snet-services)"
             )
 
         # --- Observability ---
-        with Cluster("Observability (private via AMPLS)", graph_attr=private_paas_style):
-            law = LogAnalyticsWorkspaces("Log Analytics\naiinvest-law-...\ningest+query Disabled")
+        with Cluster(
+            "Observability (private via AMPLS)", graph_attr=private_paas_style
+        ):
+            law = LogAnalyticsWorkspaces(
+                "Log Analytics\naiinvest-law-...\ningest+query Disabled"
+            )
             appi = ApplicationInsights("App Insights\naiinvest-appi-...")
 
     # =====================================================================
-    # Operator path (dashed = control / SSH tunnel)
+    # Operator path (dashed = control over peering)
     # =====================================================================
-    operator >> Edge(label="HTTPS 443\n(Bastion tunnel)", style="dashed", color="#8A6D3B") >> bastion
-    bastion >> Edge(style="dashed", color="#8A6D3B") >> jumpbox
-    jumpbox >> Edge(label="SOCKS5\nbrowse private apps", style="dashed", color="#8A6D3B") >> pe_api
-    jumpbox >> Edge(style="dashed", color="#8A6D3B") >> pe_web
+    (
+        operator
+        >> Edge(
+            label="HTTPS via peering\n(ExpressRoute / VPN / hub)",
+            style="dashed",
+            color="#8A6D3B",
+        )
+        >> pe_web
+    )
+    (
+        operator
+        >> Edge(label="docker push / az deploy", style="dashed", color="#8A6D3B")
+        >> pe_acr
+    )
 
     # =====================================================================
     # Inbound app traffic via PE
@@ -153,10 +168,14 @@ with Diagram(
     vnet_integ >> Edge(label="image pull\n(MI auth)") >> pe_acr >> acr
     vnet_integ >> Edge() >> pe_cosmos >> cosmos
     vnet_integ >> Edge() >> pe_blob >> storage
-    vnet_integ >> Edge(
-        label="service endpoint\nMicrosoft.CognitiveServices",
-        color="#107C10",
-    ) >> ai
+    (
+        vnet_integ
+        >> Edge(
+            label="service endpoint\nMicrosoft.CognitiveServices",
+            color="#107C10",
+        )
+        >> ai
+    )
 
     # UAMI -> ACR (AcrPull)
     uami >> Edge(label="AcrPull", style="dashed", color="#5C2D91") >> acr
@@ -168,4 +187,8 @@ with Diagram(
     appi >> Edge(style="dotted", color="#999") >> law
 
     # DNS resolution (informational)
-    vnet_integ >> Edge(style="dotted", color="#888", label="DNS via 168.63.129.16") >> dns
+    (
+        vnet_integ
+        >> Edge(style="dotted", color="#888", label="DNS via 168.63.129.16")
+        >> dns
+    )

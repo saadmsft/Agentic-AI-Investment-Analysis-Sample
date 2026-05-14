@@ -1,0 +1,441 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "languageVersion": "2.0",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.42.1.51946",
+      "templateHash": "1788472209259277111"
+    }
+  },
+  "parameters": {
+    "namePrefix": {
+      "type": "string",
+      "defaultValue": "aiinvest",
+      "minLength": 4,
+      "metadata": {
+        "description": "Name prefix for resources"
+      }
+    },
+    "environment": {
+      "type": "string",
+      "defaultValue": "dev",
+      "metadata": {
+        "description": "Environment name (dev, staging, prod)"
+      }
+    },
+    "appServicePlanId": {
+      "type": "string",
+      "metadata": {
+        "description": "App Service Plan resource ID"
+      }
+    },
+    "containerRegistryServer": {
+      "type": "string",
+      "metadata": {
+        "description": "Container Registry login server, e.g. myacr.azurecr.io"
+      }
+    },
+    "containerImage": {
+      "type": "string",
+      "metadata": {
+        "description": "Container image for the backend app"
+      }
+    },
+    "cosmosAccountEndpoint": {
+      "type": "string",
+      "metadata": {
+        "description": "Cosmos DB account endpoint"
+      }
+    },
+    "cosmosDbName": {
+      "type": "string",
+      "metadata": {
+        "description": "Cosmos DB database name"
+      }
+    },
+    "storageAccountName": {
+      "type": "string",
+      "metadata": {
+        "description": "Storage Account name"
+      }
+    },
+    "allowOrigins": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "defaultValue": [
+        "*"
+      ],
+      "metadata": {
+        "description": "CORS allowed origins"
+      }
+    },
+    "isPrivate": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "When true, deploys the web app with public access disabled and a private endpoint."
+      }
+    },
+    "userAssignedIdentityName": {
+      "type": "string",
+      "metadata": {
+        "description": "User Assigned Identity name (existing in same RG)."
+      }
+    },
+    "vnetIntegrationSubnetId": {
+      "type": "string",
+      "metadata": {
+        "description": "Subnet ID for regional VNet integration (snet-services)."
+      }
+    },
+    "privateEndpointSubnetId": {
+      "type": "string",
+      "metadata": {
+        "description": "Subnet ID for the private endpoint (snet-pe)."
+      }
+    },
+    "appServicePrivateDnsZoneId": {
+      "type": "string",
+      "metadata": {
+        "description": "Private DNS zone ID for privatelink.azurewebsites.net"
+      }
+    },
+    "additionalEnvironmentVariables": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Additional environment variables"
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Tags for resources"
+      }
+    }
+  },
+  "variables": {
+    "appName": "[format('{0}-api-{1}', parameters('namePrefix'), parameters('environment'))]",
+    "environmentVariables": "[concat(createArray(createObject('name', 'COSMOS_DB_ENDPOINT', 'value', parameters('cosmosAccountEndpoint')), createObject('name', 'COSMOS_DB_DATABASE_NAME', 'value', parameters('cosmosDbName')), createObject('name', 'AZURE_STORAGE_ACCOUNT_NAME', 'value', parameters('storageAccountName')), createObject('name', 'AZURE_OPENAI_ENDPOINT', 'value', ''), createObject('name', 'AZURE_OPENAI_DEPLOYMENT_NAME', 'value', ''), createObject('name', 'ALLOW_ORIGINS', 'value', join(parameters('allowOrigins'), ','))), parameters('additionalEnvironmentVariables'))]"
+  },
+  "resources": {
+    "userAssignedIdentity": {
+      "existing": true,
+      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+      "apiVersion": "2024-11-30",
+      "name": "[parameters('userAssignedIdentityName')]"
+    },
+    "apiApp": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "apiAppDeployment",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "name": {
+            "value": "[variables('appName')]"
+          },
+          "location": {
+            "value": "[resourceGroup().location]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          },
+          "appServicePlanId": {
+            "value": "[parameters('appServicePlanId')]"
+          },
+          "containerImage": {
+            "value": "[parameters('containerImage')]"
+          },
+          "containerRegistryServer": {
+            "value": "[parameters('containerRegistryServer')]"
+          },
+          "userAssignedIdentityResourceId": {
+            "value": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('userAssignedIdentityName'))]"
+          },
+          "userAssignedIdentityClientId": {
+            "value": "[reference('userAssignedIdentity').clientId]"
+          },
+          "targetPort": {
+            "value": 8090
+          },
+          "healthCheckPath": {
+            "value": "/health"
+          },
+          "isPrivate": {
+            "value": "[parameters('isPrivate')]"
+          },
+          "vnetIntegrationSubnetId": {
+            "value": "[parameters('vnetIntegrationSubnetId')]"
+          },
+          "privateEndpointSubnetId": {
+            "value": "[parameters('privateEndpointSubnetId')]"
+          },
+          "appServicePrivateDnsZoneId": {
+            "value": "[parameters('appServicePrivateDnsZoneId')]"
+          },
+          "appSettings": {
+            "value": "[variables('environmentVariables')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.42.1.51946",
+              "templateHash": "9094118072846182188"
+            }
+          },
+          "parameters": {
+            "name": {
+              "type": "string",
+              "metadata": {
+                "description": "Web App name"
+              }
+            },
+            "location": {
+              "type": "string",
+              "defaultValue": "[resourceGroup().location]",
+              "metadata": {
+                "description": "Location for resources"
+              }
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Tags for resources"
+              }
+            },
+            "appServicePlanId": {
+              "type": "string",
+              "metadata": {
+                "description": "App Service Plan resource ID"
+              }
+            },
+            "containerImage": {
+              "type": "string",
+              "metadata": {
+                "description": "Container image reference, e.g. myacr.azurecr.io/ai-invest-api:latest"
+              }
+            },
+            "containerRegistryServer": {
+              "type": "string",
+              "metadata": {
+                "description": "Container registry login server, e.g. myacr.azurecr.io"
+              }
+            },
+            "userAssignedIdentityResourceId": {
+              "type": "string",
+              "metadata": {
+                "description": "User-assigned managed identity resource ID for ACR pull and runtime auth."
+              }
+            },
+            "userAssignedIdentityClientId": {
+              "type": "string",
+              "metadata": {
+                "description": "Client ID of the user-assigned identity (exposed to the app as AZURE_CLIENT_ID)."
+              }
+            },
+            "targetPort": {
+              "type": "int",
+              "defaultValue": 8090,
+              "metadata": {
+                "description": "Container target port the app listens on (set as WEBSITES_PORT)"
+              }
+            },
+            "vnetIntegrationSubnetId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Subnet resource ID for regional VNet integration (Microsoft.Web/serverFarms delegation)."
+              }
+            },
+            "isPrivate": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "When true, locks the app down: publicNetworkAccess=Disabled and creates a private endpoint."
+              }
+            },
+            "privateEndpointSubnetId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Subnet resource ID for the private endpoint (only when isPrivate=true)."
+              }
+            },
+            "appServicePrivateDnsZoneId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Private DNS zone resource ID for privatelink.azurewebsites.net (only when isPrivate=true)."
+              }
+            },
+            "appSettings": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "Additional app settings (array of {name,value})."
+              }
+            },
+            "healthCheckPath": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Health check path (e.g. /health, /). Empty disables health check."
+              }
+            }
+          },
+          "variables": {
+            "baseAppSettings": [
+              {
+                "name": "WEBSITES_PORT",
+                "value": "[string(parameters('targetPort'))]"
+              },
+              {
+                "name": "WEBSITES_ENABLE_APP_SERVICE_STORAGE",
+                "value": "false"
+              },
+              {
+                "name": "DOCKER_REGISTRY_SERVER_URL",
+                "value": "[format('https://{0}', parameters('containerRegistryServer'))]"
+              },
+              {
+                "name": "DOCKER_ENABLE_CI",
+                "value": "true"
+              },
+              {
+                "name": "AZURE_CLIENT_ID",
+                "value": "[parameters('userAssignedIdentityClientId')]"
+              }
+            ],
+            "vnetRouteAppSettings": "[if(empty(parameters('vnetIntegrationSubnetId')), createArray(), createArray(createObject('name', 'WEBSITE_VNET_ROUTE_ALL', 'value', '1'), createObject('name', 'WEBSITE_DNS_SERVER', 'value', '168.63.129.16'), createObject('name', 'WEBSITE_PULL_IMAGE_OVER_VNET', 'value', 'true')))]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Web/sites",
+              "apiVersion": "2024-04-01",
+              "name": "[parameters('name')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "kind": "app,linux,container",
+              "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                  "[format('{0}', parameters('userAssignedIdentityResourceId'))]": {}
+                }
+              },
+              "properties": {
+                "serverFarmId": "[parameters('appServicePlanId')]",
+                "httpsOnly": true,
+                "publicNetworkAccess": "[if(parameters('isPrivate'), 'Disabled', 'Enabled')]",
+                "keyVaultReferenceIdentity": "[parameters('userAssignedIdentityResourceId')]",
+                "virtualNetworkSubnetId": "[if(empty(parameters('vnetIntegrationSubnetId')), null(), parameters('vnetIntegrationSubnetId'))]",
+                "vnetRouteAllEnabled": "[not(empty(parameters('vnetIntegrationSubnetId')))]",
+                "siteConfig": {
+                  "linuxFxVersion": "[format('DOCKER|{0}', parameters('containerImage'))]",
+                  "acrUseManagedIdentityCreds": true,
+                  "acrUserManagedIdentityID": "[parameters('userAssignedIdentityClientId')]",
+                  "alwaysOn": true,
+                  "ftpsState": "Disabled",
+                  "http20Enabled": true,
+                  "minTlsVersion": "1.2",
+                  "healthCheckPath": "[if(empty(parameters('healthCheckPath')), null(), parameters('healthCheckPath'))]",
+                  "appSettings": "[concat(variables('baseAppSettings'), variables('vnetRouteAppSettings'), parameters('appSettings'))]"
+                }
+              }
+            },
+            {
+              "condition": "[parameters('isPrivate')]",
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}-pe', parameters('name'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('privateEndpointSubnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "[format('{0}-pe-conn', parameters('name'))]",
+                    "properties": {
+                      "privateLinkServiceId": "[resourceId('Microsoft.Web/sites', parameters('name'))]",
+                      "groupIds": [
+                        "sites"
+                      ]
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', parameters('name'))]"
+              ]
+            },
+            {
+              "condition": "[parameters('isPrivate')]",
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', format('{0}-pe', parameters('name')), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "azurewebsites",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('appServicePrivateDnsZoneId')]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-pe', parameters('name')))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "id": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Web/sites', parameters('name'))]"
+            },
+            "name": {
+              "type": "string",
+              "value": "[parameters('name')]"
+            },
+            "defaultHostName": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Web/sites', parameters('name')), '2024-04-01').defaultHostName]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "userAssignedIdentity"
+      ]
+    }
+  },
+  "outputs": {
+    "containerAppName": {
+      "type": "string",
+      "value": "[reference('apiApp').outputs.name.value]"
+    },
+    "containerAppUrl": {
+      "type": "string",
+      "value": "[reference('apiApp').outputs.defaultHostName.value]"
+    },
+    "containerAppId": {
+      "type": "string",
+      "value": "[reference('apiApp').outputs.id.value]"
+    }
+  }
+}

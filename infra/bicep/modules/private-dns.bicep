@@ -1,6 +1,6 @@
 // Private DNS zones required by zero-trust architecture.
 // One zone per service group; each zone is linked to the workload VNet so the
-// jumpbox and container apps resolve private-endpoint IPs from the VNet.
+// the App Service apps and any peered operator hosts resolve private-endpoint IPs from the VNet.
 
 @description('Name of the VNet to link zones to')
 param vnetId string
@@ -34,22 +34,26 @@ var zoneNames = [
   'privatelink.azurewebsites.net'
 ]
 
-resource zones 'Microsoft.Network/privateDnsZones@2024-06-01' = [for z in zoneNames: {
-  name: z
-  location: location
-  tags: tags
-}]
-
-resource links 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = [for (z, i) in zoneNames: {
-  name: '${zones[i].name}/link-${uniqueString(vnetId)}'
-  location: location
-  tags: tags
-  properties: {
-    virtualNetwork: { id: vnetId }
-    registrationEnabled: false
+resource zones 'Microsoft.Network/privateDnsZones@2024-06-01' = [
+  for z in zoneNames: {
+    name: z
+    location: location
+    tags: tags
   }
-  dependsOn: [ zones[i] ]
-}]
+]
+
+resource links 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = [
+  for (z, i) in zoneNames: {
+    name: '${zones[i].name}/link-${uniqueString(vnetId)}'
+    location: location
+    tags: tags
+    properties: {
+      virtualNetwork: { id: vnetId }
+      registrationEnabled: false
+    }
+    dependsOn: [zones[i]]
+  }
+]
 
 // Keyed outputs so the main template can wire each PE to its zone.
 output cosmosSqlZoneId string = zones[0].id

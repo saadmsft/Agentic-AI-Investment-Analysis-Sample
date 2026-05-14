@@ -8,46 +8,34 @@ flowchart LR
     classDef id  fill:#fde7f3,stroke:#ad1457,color:#000,stroke-width:1.5px
     classDef dns fill:#f5f5f5,stroke:#616161,color:#000,stroke-width:1.5px
 
-    Op([Operator / Developer]):::pub
+    Op([Operator / Developer<br/>on peered network]):::vnet
     Internet([Public internet]):::pub
 
     subgraph RG["Azure Resource Group"]
       direction LR
-      subgraph VNet["VNet · 10.50.0.0/16"]
+      subgraph VNet["Workload VNet · customer-supplied /26"]
         direction TB
-        subgraph S_Bastion["AzureBastionSubnet /26"]
-          Bastion["Azure Bastion · Standard<br/>(only public IP)"]:::pub
+        subgraph S_Svc["snet-services /27<br/>delegated: Microsoft.Web/serverFarms<br/>serviceEndpoint: Microsoft.CognitiveServices"]
+          VnetInteg["App Service VNet integration<br/>(all egress routed to VNet)"]:::vnet
         end
-        subgraph S_Jump["snet-jumpbox /27"]
-          Jump["Windows jumpbox VM<br/>no public IP · UAMI"]:::vnet
-        end
-        subgraph S_Aca["snet-aca-infra /23 · delegated"]
-          ACA["Container Apps Environment<br/>workload profiles · internal=true"]:::app
-          APIApp["API container app<br/>internal :8090"]:::app
-          WebApp["Web container app<br/>internal :8080"]:::app
-        end
-        subgraph S_Pe["snet-pe /26 · Private Endpoints"]
+        subgraph S_Pe["snet-pe /27 · Private Endpoints"]
+          PE_Api(("PE<br/>API App")):::pe
+          PE_Web(("PE<br/>Web App")):::pe
           PE_Acr(("PE<br/>ACR")):::pe
           PE_Cos(("PE<br/>Cosmos")):::pe
           PE_Blob(("PE<br/>Blob")):::pe
           PE_Ai(("PE<br/>AI Foundry")):::pe
           PE_Ampls(("PE<br/>AMPLS")):::pe
-          PE_Acs(("PE<br/>App Config")):::pe
-        end
-        subgraph S_Build["snet-build · reserved"]
-          Build["ACR Tasks / build agents"]:::vnet
-        end
-        subgraph S_Mgmt["snet-mgmt · reserved"]
-          Runner["Self-hosted CI/CD runner"]:::vnet
         end
       end
 
       subgraph PaaS["Private PaaS · publicNetworkAccess=Disabled"]
-        ACR["Azure Container Registry<br/>Premium · admin disabled"]:::data
+        APIApp["API App Service · P0v3 Linux<br/>DOCKER · public=Disabled"]:::app
+        WebApp["Web App Service · P0v3 Linux<br/>DOCKER · public=Disabled"]:::app
+        ACR["Azure Container Registry · Premium<br/>admin disabled · public=Disabled"]:::data
         Cosmos["Cosmos DB<br/>disableLocalAuth=true"]:::data
         Storage["Storage Account<br/>allowSharedKeyAccess=false"]:::data
-        AI["Azure AI Foundry<br/>+ OpenAI gpt-4.1-mini"]:::data
-        AppConfig["App Configuration<br/>optional"]:::data
+        AI["Azure AI Foundry · S0<br/>+ gpt-4.1-mini · GlobalStandard 100<br/>networkAcls: Deny · VNet rule snet-services"]:::data
       end
 
       subgraph Obs["Observability via AMPLS"]
@@ -60,43 +48,40 @@ flowchart LR
         UAMI["User-Assigned Managed Identity<br/>AcrPull/Push · Storage Blob ·<br/>Cosmos Data Contributor · Azure AI User"]:::id
       end
 
-      PDNS[("Private DNS Zones<br/>documents · blob · azurecr<br/>openai · cognitiveservices · services.ai<br/>azconfig · monitor · oms · ods · agentsvc")]:::dns
+      PDNS[("Private DNS Zones<br/>azurewebsites · documents · blob · azurecr<br/>openai · cognitiveservices · services.ai<br/>monitor · oms · ods · agentsvc")]:::dns
     end
 
-    Op -- "HTTPS 443" --> Bastion
-    Bastion -- "RDP tunnel" --> Jump
-    Jump -- "docker push / az deploy" --> PE_Acr
-    Jump -- "browser tunnel" --> WebApp
+    Op -- "HTTPS via peering<br/>(ExpressRoute / VPN / hub VNet)" --> PE_Web
+    Op -- "docker push / az deploy" --> PE_Acr
 
-    WebApp -- "HTTP internal" --> APIApp
-    APIApp -- "AAD token" --> PE_Cos
-    APIApp -- "AAD token" --> PE_Blob
-    APIApp -- "AAD token" --> PE_Ai
-    APIApp -- "optional" --> PE_Acs
+    WebApp -- "VNet integration" --> VnetInteg
+    APIApp -- "VNet integration" --> VnetInteg
+    VnetInteg -- "AAD token" --> PE_Cos
+    VnetInteg -- "AAD token" --> PE_Blob
+    VnetInteg -- "AAD token" --> PE_Ai
+    VnetInteg -- "image pull" --> PE_Acr
 
+    PE_Api -. "private link" .-> APIApp
+    PE_Web -. "private link" .-> WebApp
     PE_Acr -. "private link" .-> ACR
     PE_Cos -. "private link" .-> Cosmos
     PE_Blob -. "private link" .-> Storage
     PE_Ai -. "private link" .-> AI
-    PE_Acs -. "private link" .-> AppConfig
     PE_Ampls -. "private link" .-> AMPLS
     AMPLS --- LA
     AMPLS --- AppI
     APIApp -. "telemetry" .-> PE_Ampls
     WebApp -. "telemetry" .-> PE_Ampls
-    ACA -. "logs" .-> PE_Ampls
 
-    Jump -. "DNS" .-> PDNS
-    APIApp -. "DNS" .-> PDNS
-    WebApp -. "DNS" .-> PDNS
+    VnetInteg -. "DNS" .-> PDNS
+    Op -. "DNS via peering" .-> PDNS
 
     UAMI -. "federated" .-> APIApp
     UAMI -. "federated" .-> WebApp
-    UAMI -. "attached" .-> Jump
 
     Internet -- "blocked" --> ACR
     Internet -- "blocked" --> Cosmos
     Internet -- "blocked" --> Storage
     Internet -- "blocked" --> AI
-    Internet -- "blocked" --> ACA
-    Internet == "allowed" ==> Bastion
+    Internet -- "blocked" --> APIApp
+    Internet -- "blocked" --> WebApp

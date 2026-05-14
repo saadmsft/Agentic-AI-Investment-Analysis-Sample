@@ -12,25 +12,11 @@ param location string = resourceGroup().location
 // ################################################
 // Zero-trust / networking parameters
 
-@description('When true, deploys the zero-trust topology: VNet + private endpoints + internal ACA + disabled public network access on all PaaS resources.')
+@description('When true, deploys the zero-trust topology: VNet + private endpoints + private App Service + disabled public network access on all PaaS resources.')
 param isPrivate bool = true
 
-@description('When true (and isPrivate=true), also deploys a Linux jumpbox + Azure Bastion for operator access.')
-param deployJumpbox bool = true
-
-@description('VNet address space used when isPrivate=true')
-param vnetAddressPrefix string = '10.50.0.0/16'
-
-@description('Admin username for the jumpbox VM')
-param jumpboxAdminUsername string = 'azureuser'
-
-@description('SSH public key for the jumpbox VM (required when deployJumpbox=true)')
-@secure()
-param jumpboxAdminPublicKey string = ''
-
-@description('Azure Bastion SKU. Standard required for native-client tunneling.')
-@allowed([ 'Basic', 'Standard' ])
-param bastionSku string = 'Standard'
+@description('Address space for the workload VNet. Customer supplies a /26 (e.g. 10.123.45.0/26). Required for both private and public deployments (a placeholder is acceptable when isPrivate=false).')
+param vnetAddressPrefix string
 
 // ################################################
 // Application specific parameters
@@ -39,12 +25,12 @@ param bastionSku string = 'Standard'
 param cosmosDbName string = 'ai-investment-analysis-sample'
 
 param cosmosDBContainerNames array = [
-  {name: 'opportunities', partitionKey: '/owner_id'}
-  {name: 'users', partitionKey: '/email'}
-  {name: 'documents', partitionKey: '/opportunity_id'}
-  {name: 'analysis', partitionKey: '/opportunity_id'}
-  {name: 'workflow_events', partitionKey: '/analysis_id'}
-  {name: 'what_if_conversations', partitionKey: '/analysis_id'}
+  { name: 'opportunities', partitionKey: '/owner_id' }
+  { name: 'users', partitionKey: '/email' }
+  { name: 'documents', partitionKey: '/opportunity_id' }
+  { name: 'analysis', partitionKey: '/opportunity_id' }
+  { name: 'workflow_events', partitionKey: '/analysis_id' }
+  { name: 'what_if_conversations', partitionKey: '/analysis_id' }
 ]
 
 @description('Name of the blob storage container for documents')
@@ -52,7 +38,6 @@ param docsContainerName string = 'opportunity-documents'
 
 @description('Location for AI Foundry resources')
 param aiFoundryLocation string = resourceGroup().location
-
 
 var resourceGroupId = resourceGroup().id
 var tags = {
@@ -146,7 +131,9 @@ module ampls 'modules/ampls.bicep' = if (isPrivate) {
 module storage 'modules/storage.bicep' = {
   name: 'storageAccountDeployment.${shortHash}'
   params: {
-    storageAccountName: length('${namePrefix}sta${uniqueString(resourceGroupId)}') > 24 ? substring(toLower('${namePrefix}sta${uniqueString(resourceGroupId)}'), 0, 24) : toLower('${namePrefix}sta${uniqueString(resourceGroupId)}')
+    storageAccountName: length('${namePrefix}sta${uniqueString(resourceGroupId)}') > 24
+      ? substring(toLower('${namePrefix}sta${uniqueString(resourceGroupId)}'), 0, 24)
+      : toLower('${namePrefix}sta${uniqueString(resourceGroupId)}')
     location: location
     docsContainerName: docsContainerName
     roleAssignedManagedIdentityPrincipalIds: [userAssignedIdentity.outputs.principalId]
@@ -229,48 +216,6 @@ module aiFoundry 'modules/ai-foundry.bicep' = {
 }
 
 // ################################################
-// Operator access plane — Bastion + Jumpbox
-
-module bastion 'modules/bastion.bicep' = if (isPrivate && deployJumpbox) {
-  name: 'bastionDeployment.${shortHash}'
-  params: {
-    name: toLower('${namePrefix}-bastion-${uniqueString(resourceGroupId)}')
-    location: location
-    subnetId: network.outputs.bastionSubnetId
-    sku: bastionSku
-    tags: tags
-  }
-}
-
-module jumpbox 'modules/jumpbox-linux.bicep' = if (isPrivate && deployJumpbox) {
-  name: 'jumpboxDeployment.${shortHash}'
-  params: {
-    name: toLower('${namePrefix}-jump-${uniqueString(resourceGroupId)}')
-    location: location
-    subnetId: network.outputs.jumpboxSubnetId
-    adminUsername: jumpboxAdminUsername
-    adminPublicKey: jumpboxAdminPublicKey
-    userAssignedIdentityId: userAssignedIdentity.outputs.resourceId
-    tags: tags
-  }
-}
-
-var uaiName = toLower('${namePrefix}-uai-${uniqueString(resourceGroupId)}')
-
-// Grant the jumpbox identity the roles needed to run scripts end-to-end.
-// UAMI already has AcrPull/AcrPush/AcrDelete + Storage + Cosmos data roles;
-// add Contributor scoped to the resource group so it can deploy container apps.
-resource jumpboxRgContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (isPrivate && deployJumpbox) {
-  name: guid(resourceGroup().id, uaiName, 'b24988ac-6180-42a0-ab88-20f7382dd24c')
-  scope: resourceGroup()
-  properties: {
-    principalId: userAssignedIdentity.outputs.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b24988ac-6180-42a0-ab88-20f7382dd24c') // Contributor
-  }
-}
-
-// ################################################
 // Outputs
 
 output userAssignedIdentityName string = userAssignedIdentity.outputs.name
@@ -292,5 +237,3 @@ output aiProjectName string = aiFoundry.outputs.aiProjectName
 output aiServicesName string = aiFoundry.outputs.aiServicesName
 output isPrivate bool = isPrivate
 output vnetId string = isPrivate ? network.outputs.vnetId : ''
-output jumpboxName string = (isPrivate && deployJumpbox) ? jumpbox.outputs.vmName : ''
-output bastionName string = (isPrivate && deployJumpbox) ? bastion.outputs.bastionName : ''

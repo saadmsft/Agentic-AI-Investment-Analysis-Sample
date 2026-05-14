@@ -124,12 +124,14 @@ The application uses Server-Sent Events (SSE) for real-time updates:
 - **Historical Events**: New subscribers receive historical events before live updates
 - **Background Processing**: Analysis runs in FastAPI background tasks while streaming events
 
-## � One-Click Azure Deployment
+## 🚀 One-Click Azure Deployment
 
-Deploy the full Azure infrastructure (zero-trust topology by default — VNet, private endpoints, internal Container Apps, Cosmos DB, Storage, Azure AI Foundry, Key Vault, Container Registry, and an optional jumpbox + Azure Bastion) directly from the Azure Portal. Two pre-built ARM templates are provided so you can pick the operator OS that matches your laptop:
+Deploy the full Azure infrastructure (zero-trust topology by default — VNet, private endpoints, App Service, Cosmos DB, Storage, Azure AI Foundry, Container Registry, and AMPLS observability) directly from the Azure Portal. **No Bastion, no jumpbox, no public IPs are provisioned** — operators are expected to reach the workload from their own peered network (ExpressRoute, VPN, or hub VNet).
 
-- **Windows jumpbox (RDP via Bastion)** — recommended for Windows operators. Template: [infra/bicep/main.json](infra/bicep/main.json).
-- **Linux jumpbox (SSH via Bastion)** — recommended for macOS/Linux operators. Template: [infra/bicep/main-linux.json](infra/bicep/main-linux.json).
+Pre-built ARM templates:
+- [infra/bicep/main.json](infra/bicep/main.json) — primary template
+- [infra/bicep/main-linux.json](infra/bicep/main-linux.json) — Linux variant (functionally identical at the network layer)
+
 <p align="center">
     <picture>
     <img src="./_assets/zero-trust-architecture.png" alt="AI Investment Analysis - Private Zero-Trust Architecture" style="max-width:800px;width:100%" />
@@ -144,44 +146,52 @@ Deploy the full Azure infrastructure (zero-trust topology by default — VNet, p
 
 > See [`_assets/ZERO_TRUST_ARCHITECTURE.md`](_assets/ZERO_TRUST_ARCHITECTURE.md) for a full breakdown of the topology above.
 
-#### Deploy with a Windows jumpbox (RDP)
+#### Deploy
 
-[![Deploy to Azure (Windows jumpbox)](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fsaadmsft%2FAgentic-AI-Investment-Analysis-Sample%2Fmain%2Finfra%2Fbicep%2Fmain.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fsaadmsft%2FAgentic-AI-Investment-Analysis-Sample%2Fmain%2Finfra%2Fbicep%2Fmain.json)
 [![Visualize](https://raw.githubusercontent.com/Azure/azure-quickstart-templates/master/1-CONTRIBUTION-GUIDE/images/visualizebutton.svg?sanitize=true)](http://armviz.io/#/?load=https%3A%2F%2Fraw.githubusercontent.com%2Fsaadmsft%2FAgentic-AI-Investment-Analysis-Sample%2Fmain%2Finfra%2Fbicep%2Fmain.json)
-
-#### Deploy with a Linux jumpbox (SSH)
-
-[![Deploy to Azure (Linux jumpbox)](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fsaadmsft%2FAgentic-AI-Investment-Analysis-Sample%2Fmain%2Finfra%2Fbicep%2Fmain-linux.json)
-[![Visualize](https://raw.githubusercontent.com/Azure/azure-quickstart-templates/master/1-CONTRIBUTION-GUIDE/images/visualizebutton.svg?sanitize=true)](http://armviz.io/#/?load=https%3A%2F%2Fraw.githubusercontent.com%2Fsaadmsft%2FAgentic-AI-Investment-Analysis-Sample%2Fmain%2Finfra%2Fbicep%2Fmain-linux.json)
 
 ### Before you click
 
 1. **Create (or pick) a resource group** in your target subscription — the template deploys at resource-group scope.
-2. **Choose your jumpbox credential** if you keep the default `deployJumpbox=true`:
-   - **Windows template** — supply a `jumpboxAdminPassword` (12–123 chars; at least three of lowercase, uppercase, digit, special character).
-   - **Linux template** — paste the contents of `~/.ssh/id_rsa.pub` (or any OpenSSH public key) into `jumpboxAdminPublicKey`.
-   Leave the credential empty only if you set `deployJumpbox=false`.
-3. **Pick locations** that have capacity for Azure AI Foundry models (e.g. `swedencentral`, `eastus2`) for `aiFoundryLocation`.
+2. **Have a `/26` CIDR ready** for the workload VNet. The customer's network team must allocate it from a range that does **not** overlap any peered VNet. It will be split into two `/27` subnets (App Service + Private Endpoints).
+3. **Have peering in place** (ExpressRoute / VPN / hub VNet) before you try to run scripts 2 + 3 — the private ACR and App Service are not reachable from the public internet.
+4. **Pick locations** that have capacity for Azure AI Foundry models (e.g. `swedencentral`, `eastus2`) for `aiFoundryLocation`.
 
 ### Key parameters
 
-| Parameter               | Default                 | Description                                                                                                         |
-| ----------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `namePrefix`            | `invstdemo`             | Prefix used for all resource names                                                                                  |
-| `environment`           | `dev`                   | Environment tag (`dev`, `staging`, `prod`)                                                                          |
-| `location`              | resource group location | Region for most resources                                                                                           |
-| `aiFoundryLocation`     | resource group location | Region for Azure AI Foundry / model deployment                                                                      |
-| `isPrivate`             | `true`                  | Deploy zero-trust topology (VNet + private endpoints + internal ACA). Set `false` for a public, demo-only topology. |
-| `deployJumpbox`         | `true`                  | Deploy a jumpbox + Azure Bastion for operator access (only when `isPrivate=true`)                                   |
-| `jumpboxAdminPassword`  | _(empty)_               | **Windows template only** — required when `deployJumpbox=true`. 12–123 chars, complexity rules apply.               |
-| `jumpboxAdminPublicKey` | _(empty)_               | **Linux template only** — required when `deployJumpbox=true`. OpenSSH public key.                                   |
-| `bastionSku`            | `Standard`              | `Basic` or `Standard` (Standard required for native-client RDP tunneling)                                          |
-| `vnetAddressPrefix`     | `10.50.0.0/16`          | VNet CIDR when `isPrivate=true`                                                                                     |
+| Parameter           | Default                 | Description                                                                                                                |
+| ------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `namePrefix`        | `invstdemo`             | Prefix used for any resource whose name is not explicitly overridden (see below)                                           |
+| `environment`       | `dev`                   | Environment tag (`dev`, `staging`, `prod`)                                                                                 |
+| `location`          | resource group location | Region for most resources                                                                                                  |
+| `aiFoundryLocation` | resource group location | Region for Azure AI Foundry / model deployment                                                                             |
+| `isPrivate`         | `true`                  | Deploy zero-trust topology (VNet + private endpoints + private App Service). Set `false` for a public, demo-only topology. |
+| `vnetAddressPrefix` | **required**            | `/26` CIDR for the workload VNet (e.g. `10.123.45.0/26`). Required even when `isPrivate=false` (placeholder is fine).      |
 
-> **Note:** The portal one-click flow provisions the Azure infrastructure only. After the deployment finishes, build and push the container images and roll out the apps with the helper scripts:
+#### Custom naming convention (optional)
+
+Every resource also accepts an explicit `*NameOverride` parameter so customers with their own CAF / corporate naming standard can plug exact names in:
+
+| Override parameter                    | Resource                                |
+| ------------------------------------- | --------------------------------------- |
+| `vnetNameOverride`                    | Virtual Network                         |
+| `userAssignedIdentityNameOverride`    | User-Assigned Managed Identity          |
+| `logAnalyticsWorkspaceNameOverride`   | Log Analytics workspace                 |
+| `appInsightsNameOverride`             | Application Insights                    |
+| `amplsNameOverride`                   | Azure Monitor Private Link Scope        |
+| `storageAccountNameOverride`          | Storage account (3-24 lowercase alnum)  |
+| `cosmosAccountNameOverride`           | Cosmos DB account                       |
+| `containerRegistryNameOverride`       | Azure Container Registry                |
+| `appServicePlanNameOverride`          | App Service Plan                        |
+| `aiFoundryBaseNameOverride`           | AI Foundry base (≤ 12 lowercase alnum)  |
+
+Any override left empty falls back to the default `<namePrefix>-<kind>-<hash>` pattern, so existing deployments are unaffected. A worked example is in [`infra/bicep/main.investcorp.example.bicepparam`](infra/bicep/main.investcorp.example.bicepparam).
+
+> **Note:** The portal one-click flow provisions the Azure infrastructure only. After the deployment finishes, build and push the container images and roll out the apps with the helper scripts — **run them from a workstation peered to the workload VNet**:
 >
 > ```bash
-> ./infra/2-build-and-push-images.sh -g <your-resource-group>
+> ./infra/2-build-and-push-images.sh -r <your-acr-login-server>
 > ./infra/3-deploy-apps.sh           -g <your-resource-group>
 > ```
 >
@@ -189,12 +199,17 @@ Deploy the full Azure infrastructure (zero-trust topology by default — VNet, p
 
 ### 📘 Full private-deployment documentation
 
-The end-to-end reference for the zero-trust topology — every parameter, module, subnet, Private DNS zone, RBAC assignment, app setting, and operational runbook — lives in [`docs/PRIVATE_DEPLOYMENT.md`](docs/PRIVATE_DEPLOYMENT.md). Use it when you need to:
+Two references are maintained:
 
-- Customize VNet sizing, subnets, or NSG rules
+- [`docs/PRIVATE_DEPLOYMENT.md`](docs/PRIVATE_DEPLOYMENT.md) — engineering-grade reference. Every parameter, module, subnet, Private DNS zone, RBAC assignment, app setting, and operational runbook.
+- [`docs/CUSTOMER_DEPLOYMENT_INVESTCORP.md`](docs/CUSTOMER_DEPLOYMENT_INVESTCORP.md) — **customer-facing deployment package** (InvestCorp template, reusable for any customer): resource inventory + SKUs, monthly cost estimate, network requirements, operator workstation prerequisites, outbound URL whitelist for bootstrap, temporary changes required during bootstrap (e.g. `AcrPush` RBAC, optional ACR public toggle), RBAC summary, step-by-step runbook, post-deploy verification, hand-off checklist, and instructions for plugging in a custom naming convention.
+
+Use them when you need to:
+
+- Customize the `/26` split or NSG rules
 - Understand which roles are granted to the workload UAMI and the deployer
 - Switch between `isPrivate=true` (zero-trust) and `isPrivate=false` (public demo)
-- Operate the jumpbox + Azure Bastion access plane (Windows VM, RDP via Bastion)
+- Set up DNS forwarding from your peered network so private FQDNs resolve correctly
 - Troubleshoot private-endpoint, DNS, or image-pull issues
 
 ## �📦 Prerequisites

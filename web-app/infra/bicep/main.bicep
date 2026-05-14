@@ -22,7 +22,7 @@ param appServicePlanId string
 @description('User Assigned Identity name (existing in same RG).')
 param userAssignedIdentityName string
 
-@description('Subnet ID for regional VNet integration (snet-appsvc).')
+@description('Subnet ID for regional VNet integration (snet-services).')
 param vnetIntegrationSubnetId string
 
 @description('Subnet ID for the private endpoint (snet-pe).')
@@ -45,12 +45,14 @@ resource userAssignedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@
   name: userAssignedIdentityName
 }
 
-var environmentVariables = !empty(backendApiUrl) ? [
-  {
-    name: 'VITE_API_BASE_URL'
-    value: backendApiUrl
-  }
-] : []
+var environmentVariables = !empty(backendApiUrl)
+  ? [
+      {
+        name: 'VITE_API_BASE_URL'
+        value: backendApiUrl
+      }
+    ]
+  : []
 
 module webApp '../../../infra/bicep/modules/web-app-container.bicep' = {
   name: 'webAppDeployment'

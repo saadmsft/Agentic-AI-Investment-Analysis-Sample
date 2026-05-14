@@ -32,7 +32,7 @@ param isPrivate bool = true
 @description('User Assigned Identity name (existing in same RG).')
 param userAssignedIdentityName string
 
-@description('Subnet ID for regional VNet integration (snet-appsvc).')
+@description('Subnet ID for regional VNet integration (snet-services).')
 param vnetIntegrationSubnetId string
 
 @description('Subnet ID for the private endpoint (snet-pe).')
@@ -54,32 +54,35 @@ resource userAssignedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@
   name: userAssignedIdentityName
 }
 
-var environmentVariables = concat([
-  {
-    name: 'COSMOS_DB_ENDPOINT'
-    value: cosmosAccountEndpoint
-  }
-  {
-    name: 'COSMOS_DB_DATABASE_NAME'
-    value: cosmosDbName
-  }
-  {
-    name: 'AZURE_STORAGE_ACCOUNT_NAME'
-    value: storageAccountName
-  }
-  {
-    name: 'AZURE_OPENAI_ENDPOINT'
-    value: ''
-  }
-  {
-    name: 'AZURE_OPENAI_DEPLOYMENT_NAME'
-    value: ''
-  }
-  {
-    name: 'ALLOW_ORIGINS'
-    value: join(allowOrigins, ',')
-  }
-], additionalEnvironmentVariables)
+var environmentVariables = concat(
+  [
+    {
+      name: 'COSMOS_DB_ENDPOINT'
+      value: cosmosAccountEndpoint
+    }
+    {
+      name: 'COSMOS_DB_DATABASE_NAME'
+      value: cosmosDbName
+    }
+    {
+      name: 'AZURE_STORAGE_ACCOUNT_NAME'
+      value: storageAccountName
+    }
+    {
+      name: 'AZURE_OPENAI_ENDPOINT'
+      value: ''
+    }
+    {
+      name: 'AZURE_OPENAI_DEPLOYMENT_NAME'
+      value: ''
+    }
+    {
+      name: 'ALLOW_ORIGINS'
+      value: join(allowOrigins, ',')
+    }
+  ],
+  additionalEnvironmentVariables
+)
 
 module apiApp '../../../infra/bicep/modules/web-app-container.bicep' = {
   name: 'apiAppDeployment'

@@ -156,25 +156,25 @@ fi
 # to avoid multiple az command calls
 get_deployment_outputs() {
     local resource_group="$1"
-    
+
     # Get the deployment name
     local deployment_name=$(az deployment group list \
         --resource-group "$resource_group" \
         --query "[?contains(name, 'ai-invest-appsvc')].name | [0]" \
         --output tsv)
-    
+
     if [ -z "$deployment_name" ]; then
         echo -e "${RED}❌ Infrastructure deployment not found. Please run deploy-azure-infra.sh first.${NC}"
         exit 1
     fi
-    
+
     # Fetch all outputs in a single call
     DEPLOYMENT_OUTPUTS=$(az deployment group show \
         --resource-group "$resource_group" \
         --name "$deployment_name" \
         --query "properties.outputs" \
         --output json)
-    
+
     if [ -z "$DEPLOYMENT_OUTPUTS" ]; then
         echo -e "${RED}❌ Failed to retrieve deployment outputs.${NC}"
         exit 1
@@ -482,7 +482,7 @@ fi
 
 AI_ACCOUNT=$(az cognitiveservices account list -g "$RESOURCE_GROUP" --query "[0].name" -o tsv 2>/dev/null)
 if [ -n "$AI_ACCOUNT" ] && [ -n "$APPSVC_SUBNET_ID" ]; then
-    echo -e "${BLUE}🔒 Locking AI Services account '$AI_ACCOUNT' to snet-appsvc only...${NC}"
+    echo -e "${BLUE}🔒 Locking AI Services account '$AI_ACCOUNT' to snet-services only...${NC}"
     az rest --method PATCH \
         --url "https://management.azure.com/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.CognitiveServices/accounts/$AI_ACCOUNT?api-version=2024-10-01" \
         --body "{\"properties\":{\"networkAcls\":{\"defaultAction\":\"Deny\",\"bypass\":\"AzureServices\",\"virtualNetworkRules\":[{\"id\":\"$APPSVC_SUBNET_ID\",\"ignoreMissingVnetServiceEndpoint\":false}],\"ipRules\":[]}}}" \

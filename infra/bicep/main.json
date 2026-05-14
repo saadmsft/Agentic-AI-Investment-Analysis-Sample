@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.42.1.51946",
-      "templateHash": "14153731485685723076"
+      "templateHash": "2508985449853863683"
     }
   },
   "parameters": {
@@ -35,46 +35,13 @@
       "type": "bool",
       "defaultValue": true,
       "metadata": {
-        "description": "When true, deploys the zero-trust topology: VNet + private endpoints + internal ACA + disabled public network access on all PaaS resources."
-      }
-    },
-    "deployJumpbox": {
-      "type": "bool",
-      "defaultValue": true,
-      "metadata": {
-        "description": "When true (and isPrivate=true), also deploys a Windows jumpbox + Azure Bastion for operator access."
+        "description": "When true, deploys the zero-trust topology: VNet + private endpoints + private App Service + disabled public network access on all PaaS resources."
       }
     },
     "vnetAddressPrefix": {
       "type": "string",
-      "defaultValue": "10.50.0.0/16",
       "metadata": {
-        "description": "VNet address space used when isPrivate=true"
-      }
-    },
-    "jumpboxAdminUsername": {
-      "type": "string",
-      "defaultValue": "azureuser",
-      "metadata": {
-        "description": "Admin username for the jumpbox VM"
-      }
-    },
-    "jumpboxAdminPassword": {
-      "type": "securestring",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Admin password for the Windows jumpbox VM (required when deployJumpbox=true). Must satisfy Azure Windows VM password complexity rules: 12-123 chars; 3 of: lowercase, uppercase, digit, special."
-      }
-    },
-    "bastionSku": {
-      "type": "string",
-      "defaultValue": "Standard",
-      "allowedValues": [
-        "Basic",
-        "Standard"
-      ],
-      "metadata": {
-        "description": "Azure Bastion SKU. Standard required for native-client tunneling."
+        "description": "Address space for the workload VNet. Customer supplies a /26 (e.g. 10.123.45.0/26). Required for both private and public deployments (a placeholder is acceptable when isPrivate=false)."
       }
     },
     "cosmosDbName": {
@@ -126,6 +93,76 @@
       "metadata": {
         "description": "Location for AI Foundry resources"
       }
+    },
+    "vnetNameOverride": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Explicit name for the workload VNet. Default: <namePrefix>-vnet-<hash>"
+      }
+    },
+    "userAssignedIdentityNameOverride": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Explicit name for the User-Assigned Managed Identity. Default: <namePrefix>-uai-<hash>"
+      }
+    },
+    "logAnalyticsWorkspaceNameOverride": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Explicit name for the Log Analytics workspace. Default: <namePrefix>-law-<hash>"
+      }
+    },
+    "appInsightsNameOverride": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Explicit name for the Application Insights component. Default: <namePrefix>-appi-<hash>"
+      }
+    },
+    "amplsNameOverride": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Explicit name for the Azure Monitor Private Link Scope. Default: <namePrefix>-ampls-<hash>"
+      }
+    },
+    "storageAccountNameOverride": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Explicit name for the Storage account (must be 3-24 lowercase alphanumerics). Default: <namePrefix>sta<hash> trimmed to 24 chars"
+      }
+    },
+    "cosmosAccountNameOverride": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Explicit name for the Cosmos DB account. Default: <namePrefix>-cosmosdb-<hash>"
+      }
+    },
+    "containerRegistryNameOverride": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Explicit name for the Azure Container Registry (must be 5-50 alphanumerics). Default: <namePrefix>acr<hash>"
+      }
+    },
+    "appServicePlanNameOverride": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Explicit name for the App Service Plan. Default: <namePrefix>-asp-<hash>"
+      }
+    },
+    "aiFoundryBaseNameOverride": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Explicit base name (max 12 chars, lowercase) used to derive AI Foundry resource names. Default: derived from <namePrefix>-<environment>-<rg.id>"
+      }
     }
   },
   "variables": {
@@ -135,23 +172,19 @@
       "Project": "ai-investment-analysis-sample"
     },
     "shortHash": "[substring(uniqueString(resourceGroup().id, deployment().name), 0, 8)]",
-    "uaiName": "[toLower(format('{0}-uai-{1}', parameters('namePrefix'), uniqueString(variables('resourceGroupId'))))]"
+    "defaultStorageName": "[toLower(format('{0}sta{1}', parameters('namePrefix'), uniqueString(variables('resourceGroupId'))))]",
+    "resolvedVnetName": "[if(empty(parameters('vnetNameOverride')), toLower(format('{0}-vnet-{1}', parameters('namePrefix'), uniqueString(variables('resourceGroupId')))), parameters('vnetNameOverride'))]",
+    "resolvedUamiName": "[if(empty(parameters('userAssignedIdentityNameOverride')), toLower(format('{0}-uai-{1}', parameters('namePrefix'), uniqueString(variables('resourceGroupId')))), parameters('userAssignedIdentityNameOverride'))]",
+    "resolvedLawName": "[if(empty(parameters('logAnalyticsWorkspaceNameOverride')), toLower(format('{0}-law-{1}', parameters('namePrefix'), uniqueString(variables('resourceGroupId')))), parameters('logAnalyticsWorkspaceNameOverride'))]",
+    "resolvedAppiName": "[if(empty(parameters('appInsightsNameOverride')), toLower(format('{0}-appi-{1}', parameters('namePrefix'), uniqueString(variables('resourceGroupId')))), parameters('appInsightsNameOverride'))]",
+    "resolvedAmplsName": "[if(empty(parameters('amplsNameOverride')), toLower(format('{0}-ampls-{1}', parameters('namePrefix'), uniqueString(variables('resourceGroupId')))), parameters('amplsNameOverride'))]",
+    "resolvedStorageName": "[if(empty(parameters('storageAccountNameOverride')), if(greater(length(variables('defaultStorageName')), 24), substring(variables('defaultStorageName'), 0, 24), variables('defaultStorageName')), parameters('storageAccountNameOverride'))]",
+    "resolvedCosmosName": "[if(empty(parameters('cosmosAccountNameOverride')), toLower(format('{0}-cosmosdb-{1}', parameters('namePrefix'), uniqueString(resourceGroup().id))), parameters('cosmosAccountNameOverride'))]",
+    "resolvedAcrName": "[if(empty(parameters('containerRegistryNameOverride')), toLower(format('{0}acr{1}', parameters('namePrefix'), uniqueString(variables('resourceGroupId')))), parameters('containerRegistryNameOverride'))]",
+    "resolvedAspName": "[if(empty(parameters('appServicePlanNameOverride')), toLower(format('{0}-asp-{1}', parameters('namePrefix'), uniqueString(variables('resourceGroupId')))), parameters('appServicePlanNameOverride'))]",
+    "resolvedAiFoundryBaseName": "[if(empty(parameters('aiFoundryBaseNameOverride')), substring(toLower(uniqueString(format('ai-{0}-{1}-{2}', parameters('namePrefix'), parameters('environment'), resourceGroup().id))), 0, 12), parameters('aiFoundryBaseNameOverride'))]"
   },
   "resources": {
-    "jumpboxRgContributor": {
-      "condition": "[and(parameters('isPrivate'), parameters('deployJumpbox'))]",
-      "type": "Microsoft.Authorization/roleAssignments",
-      "apiVersion": "2022-04-01",
-      "name": "[guid(resourceGroup().id, variables('uaiName'), 'b24988ac-6180-42a0-ab88-20f7382dd24c')]",
-      "properties": {
-        "principalId": "[reference('userAssignedIdentity').outputs.principalId.value]",
-        "principalType": "ServicePrincipal",
-        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b24988ac-6180-42a0-ab88-20f7382dd24c')]"
-      },
-      "dependsOn": [
-        "userAssignedIdentity"
-      ]
-    },
     "network": {
       "condition": "[parameters('isPrivate')]",
       "type": "Microsoft.Resources/deployments",
@@ -164,7 +197,7 @@
         "mode": "Incremental",
         "parameters": {
           "vnetName": {
-            "value": "[toLower(format('{0}-vnet-{1}', parameters('namePrefix'), uniqueString(variables('resourceGroupId'))))]"
+            "value": "[variables('resolvedVnetName')]"
           },
           "vnetAddressPrefix": {
             "value": "[parameters('vnetAddressPrefix')]"
@@ -183,7 +216,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.42.1.51946",
-              "templateHash": "11703013425078531364"
+              "templateHash": "15751875796585908564"
             }
           },
           "parameters": {
@@ -202,9 +235,8 @@
             },
             "vnetAddressPrefix": {
               "type": "string",
-              "defaultValue": "10.50.0.0/16",
               "metadata": {
-                "description": "Address space for the virtual network"
+                "description": "Address space for the virtual network. MUST be a /26 supplied by the customer (e.g. 10.123.45.0/26)."
               }
             },
             "tags": {
@@ -214,6 +246,10 @@
                 "description": "Tags for resources"
               }
             }
+          },
+          "variables": {
+            "servicesSubnetPrefix": "[cidrSubnet(parameters('vnetAddressPrefix'), 27, 0)]",
+            "peSubnetPrefix": "[cidrSubnet(parameters('vnetAddressPrefix'), 27, 1)]"
           },
           "resources": [
             {
@@ -243,188 +279,7 @@
             {
               "type": "Microsoft.Network/networkSecurityGroups",
               "apiVersion": "2023-11-01",
-              "name": "[format('{0}-nsg-jumpbox', parameters('vnetName'))]",
-              "location": "[parameters('location')]",
-              "tags": "[parameters('tags')]",
-              "properties": {
-                "securityRules": [
-                  {
-                    "name": "AllowBastionInbound",
-                    "properties": {
-                      "priority": 100,
-                      "direction": "Inbound",
-                      "access": "Allow",
-                      "protocol": "Tcp",
-                      "sourceAddressPrefix": "VirtualNetwork",
-                      "sourcePortRange": "*",
-                      "destinationAddressPrefix": "VirtualNetwork",
-                      "destinationPortRanges": [
-                        "22",
-                        "3389"
-                      ]
-                    }
-                  }
-                ]
-              }
-            },
-            {
-              "type": "Microsoft.Network/networkSecurityGroups",
-              "apiVersion": "2023-11-01",
-              "name": "[format('{0}-nsg-bastion', parameters('vnetName'))]",
-              "location": "[parameters('location')]",
-              "tags": "[parameters('tags')]",
-              "properties": {
-                "securityRules": [
-                  {
-                    "name": "AllowHttpsInbound",
-                    "properties": {
-                      "priority": 120,
-                      "direction": "Inbound",
-                      "access": "Allow",
-                      "protocol": "Tcp",
-                      "sourceAddressPrefix": "Internet",
-                      "sourcePortRange": "*",
-                      "destinationAddressPrefix": "*",
-                      "destinationPortRange": "443"
-                    }
-                  },
-                  {
-                    "name": "AllowGatewayManagerInbound",
-                    "properties": {
-                      "priority": 130,
-                      "direction": "Inbound",
-                      "access": "Allow",
-                      "protocol": "Tcp",
-                      "sourceAddressPrefix": "GatewayManager",
-                      "sourcePortRange": "*",
-                      "destinationAddressPrefix": "*",
-                      "destinationPortRange": "443"
-                    }
-                  },
-                  {
-                    "name": "AllowAzureLoadBalancerInbound",
-                    "properties": {
-                      "priority": 140,
-                      "direction": "Inbound",
-                      "access": "Allow",
-                      "protocol": "Tcp",
-                      "sourceAddressPrefix": "AzureLoadBalancer",
-                      "sourcePortRange": "*",
-                      "destinationAddressPrefix": "*",
-                      "destinationPortRange": "443"
-                    }
-                  },
-                  {
-                    "name": "AllowBastionHostCommunication",
-                    "properties": {
-                      "priority": 150,
-                      "direction": "Inbound",
-                      "access": "Allow",
-                      "protocol": "*",
-                      "sourceAddressPrefix": "VirtualNetwork",
-                      "sourcePortRange": "*",
-                      "destinationAddressPrefix": "VirtualNetwork",
-                      "destinationPortRanges": [
-                        "8080",
-                        "5701"
-                      ]
-                    }
-                  },
-                  {
-                    "name": "AllowSshRdpOutbound",
-                    "properties": {
-                      "priority": 100,
-                      "direction": "Outbound",
-                      "access": "Allow",
-                      "protocol": "*",
-                      "sourceAddressPrefix": "*",
-                      "sourcePortRange": "*",
-                      "destinationAddressPrefix": "VirtualNetwork",
-                      "destinationPortRanges": [
-                        "22",
-                        "3389"
-                      ]
-                    }
-                  },
-                  {
-                    "name": "AllowAzureCloudOutbound",
-                    "properties": {
-                      "priority": 110,
-                      "direction": "Outbound",
-                      "access": "Allow",
-                      "protocol": "Tcp",
-                      "sourceAddressPrefix": "*",
-                      "sourcePortRange": "*",
-                      "destinationAddressPrefix": "AzureCloud",
-                      "destinationPortRange": "443"
-                    }
-                  },
-                  {
-                    "name": "AllowBastionCommunication",
-                    "properties": {
-                      "priority": 120,
-                      "direction": "Outbound",
-                      "access": "Allow",
-                      "protocol": "*",
-                      "sourceAddressPrefix": "VirtualNetwork",
-                      "sourcePortRange": "*",
-                      "destinationAddressPrefix": "VirtualNetwork",
-                      "destinationPortRanges": [
-                        "8080",
-                        "5701"
-                      ]
-                    }
-                  },
-                  {
-                    "name": "AllowGetSessionInformation",
-                    "properties": {
-                      "priority": 130,
-                      "direction": "Outbound",
-                      "access": "Allow",
-                      "protocol": "*",
-                      "sourceAddressPrefix": "*",
-                      "sourcePortRange": "*",
-                      "destinationAddressPrefix": "Internet",
-                      "destinationPortRange": "80"
-                    }
-                  }
-                ]
-              }
-            },
-            {
-              "type": "Microsoft.Network/networkSecurityGroups",
-              "apiVersion": "2023-11-01",
-              "name": "[format('{0}-nsg-aca', parameters('vnetName'))]",
-              "location": "[parameters('location')]",
-              "tags": "[parameters('tags')]",
-              "properties": {
-                "securityRules": []
-              }
-            },
-            {
-              "type": "Microsoft.Network/networkSecurityGroups",
-              "apiVersion": "2023-11-01",
-              "name": "[format('{0}-nsg-build', parameters('vnetName'))]",
-              "location": "[parameters('location')]",
-              "tags": "[parameters('tags')]",
-              "properties": {
-                "securityRules": []
-              }
-            },
-            {
-              "type": "Microsoft.Network/networkSecurityGroups",
-              "apiVersion": "2023-11-01",
-              "name": "[format('{0}-nsg-mgmt', parameters('vnetName'))]",
-              "location": "[parameters('location')]",
-              "tags": "[parameters('tags')]",
-              "properties": {
-                "securityRules": []
-              }
-            },
-            {
-              "type": "Microsoft.Network/networkSecurityGroups",
-              "apiVersion": "2023-11-01",
-              "name": "[format('{0}-nsg-appsvc', parameters('vnetName'))]",
+              "name": "[format('{0}-nsg-services', parameters('vnetName'))]",
               "location": "[parameters('location')]",
               "tags": "[parameters('tags')]",
               "properties": {
@@ -445,76 +300,11 @@
                 },
                 "subnets": [
                   {
-                    "name": "snet-aca-infra",
+                    "name": "snet-services",
                     "properties": {
-                      "addressPrefix": "10.50.0.0/23",
+                      "addressPrefix": "[variables('servicesSubnetPrefix')]",
                       "networkSecurityGroup": {
-                        "id": "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg-aca', parameters('vnetName')))]"
-                      },
-                      "delegations": [
-                        {
-                          "name": "aca-delegation",
-                          "properties": {
-                            "serviceName": "Microsoft.App/environments"
-                          }
-                        }
-                      ],
-                      "privateEndpointNetworkPolicies": "Disabled"
-                    }
-                  },
-                  {
-                    "name": "snet-pe",
-                    "properties": {
-                      "addressPrefix": "10.50.2.0/26",
-                      "networkSecurityGroup": {
-                        "id": "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg-pe', parameters('vnetName')))]"
-                      },
-                      "privateEndpointNetworkPolicies": "Disabled"
-                    }
-                  },
-                  {
-                    "name": "snet-jumpbox",
-                    "properties": {
-                      "addressPrefix": "10.50.2.64/27",
-                      "networkSecurityGroup": {
-                        "id": "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg-jumpbox', parameters('vnetName')))]"
-                      }
-                    }
-                  },
-                  {
-                    "name": "AzureBastionSubnet",
-                    "properties": {
-                      "addressPrefix": "10.50.2.128/26",
-                      "networkSecurityGroup": {
-                        "id": "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg-bastion', parameters('vnetName')))]"
-                      }
-                    }
-                  },
-                  {
-                    "name": "snet-build",
-                    "properties": {
-                      "addressPrefix": "10.50.2.192/27",
-                      "networkSecurityGroup": {
-                        "id": "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg-build', parameters('vnetName')))]"
-                      },
-                      "privateEndpointNetworkPolicies": "Disabled"
-                    }
-                  },
-                  {
-                    "name": "snet-mgmt",
-                    "properties": {
-                      "addressPrefix": "10.50.2.224/27",
-                      "networkSecurityGroup": {
-                        "id": "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg-mgmt', parameters('vnetName')))]"
-                      }
-                    }
-                  },
-                  {
-                    "name": "snet-appsvc",
-                    "properties": {
-                      "addressPrefix": "10.50.4.0/26",
-                      "networkSecurityGroup": {
-                        "id": "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg-appsvc', parameters('vnetName')))]"
+                        "id": "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg-services', parameters('vnetName')))]"
                       },
                       "delegations": [
                         {
@@ -530,17 +320,22 @@
                         }
                       ]
                     }
+                  },
+                  {
+                    "name": "snet-pe",
+                    "properties": {
+                      "addressPrefix": "[variables('peSubnetPrefix')]",
+                      "networkSecurityGroup": {
+                        "id": "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg-pe', parameters('vnetName')))]"
+                      },
+                      "privateEndpointNetworkPolicies": "Disabled"
+                    }
                   }
                 ]
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg-aca', parameters('vnetName')))]",
-                "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg-appsvc', parameters('vnetName')))]",
-                "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg-bastion', parameters('vnetName')))]",
-                "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg-build', parameters('vnetName')))]",
-                "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg-jumpbox', parameters('vnetName')))]",
-                "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg-mgmt', parameters('vnetName')))]",
-                "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg-pe', parameters('vnetName')))]"
+                "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg-pe', parameters('vnetName')))]",
+                "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg-services', parameters('vnetName')))]"
               ]
             }
           ],
@@ -553,33 +348,13 @@
               "type": "string",
               "value": "[parameters('vnetName')]"
             },
-            "acaInfraSubnetId": {
-              "type": "string",
-              "value": "[format('{0}/subnets/snet-aca-infra', resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName')))]"
-            },
             "peSubnetId": {
               "type": "string",
               "value": "[format('{0}/subnets/snet-pe', resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName')))]"
             },
-            "jumpboxSubnetId": {
-              "type": "string",
-              "value": "[format('{0}/subnets/snet-jumpbox', resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName')))]"
-            },
-            "bastionSubnetId": {
-              "type": "string",
-              "value": "[format('{0}/subnets/AzureBastionSubnet', resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName')))]"
-            },
-            "buildSubnetId": {
-              "type": "string",
-              "value": "[format('{0}/subnets/snet-build', resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName')))]"
-            },
-            "mgmtSubnetId": {
-              "type": "string",
-              "value": "[format('{0}/subnets/snet-mgmt', resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName')))]"
-            },
             "appSvcSubnetId": {
               "type": "string",
-              "value": "[format('{0}/subnets/snet-appsvc', resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName')))]"
+              "value": "[format('{0}/subnets/snet-services', resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName')))]"
             }
           }
         }
@@ -756,7 +531,7 @@
         "mode": "Incremental",
         "parameters": {
           "userAssignedIdentityName": {
-            "value": "[toLower(format('{0}-uai-{1}', parameters('namePrefix'), uniqueString(variables('resourceGroupId'))))]"
+            "value": "[variables('resolvedUamiName')]"
           },
           "location": {
             "value": "[parameters('location')]"
@@ -1311,7 +1086,7 @@
         "mode": "Incremental",
         "parameters": {
           "logAnalyticsWorkspaceName": {
-            "value": "[toLower(format('{0}-law-{1}', parameters('namePrefix'), uniqueString(variables('resourceGroupId'))))]"
+            "value": "[variables('resolvedLawName')]"
           },
           "roleAssignedManagedIdentityPrincipalIds": {
             "value": [
@@ -4519,7 +4294,7 @@
         "mode": "Incremental",
         "parameters": {
           "appInsightsName": {
-            "value": "[toLower(format('{0}-appi-{1}', parameters('namePrefix'), uniqueString(variables('resourceGroupId'))))]"
+            "value": "[variables('resolvedAppiName')]"
           },
           "location": {
             "value": "[parameters('location')]"
@@ -5336,7 +5111,7 @@
         "mode": "Incremental",
         "parameters": {
           "name": {
-            "value": "[toLower(format('{0}-ampls-{1}', parameters('namePrefix'), uniqueString(variables('resourceGroupId'))))]"
+            "value": "[variables('resolvedAmplsName')]"
           },
           "logAnalyticsResourceId": {
             "value": "[reference('logAnalytics').outputs.resourceId.value]"
@@ -5658,7 +5433,9 @@
         },
         "mode": "Incremental",
         "parameters": {
-          "storageAccountName": "[if(greater(length(format('{0}sta{1}', parameters('namePrefix'), uniqueString(variables('resourceGroupId')))), 24), createObject('value', substring(toLower(format('{0}sta{1}', parameters('namePrefix'), uniqueString(variables('resourceGroupId')))), 0, 24)), createObject('value', toLower(format('{0}sta{1}', parameters('namePrefix'), uniqueString(variables('resourceGroupId'))))))]",
+          "storageAccountName": {
+            "value": "[variables('resolvedStorageName')]"
+          },
           "location": {
             "value": "[parameters('location')]"
           },
@@ -12589,7 +12366,7 @@
             "value": "[parameters('location')]"
           },
           "cosmosAccountName": {
-            "value": "[toLower(format('{0}-cosmosdb-{1}', parameters('namePrefix'), uniqueString(resourceGroup().id)))]"
+            "value": "[variables('resolvedCosmosName')]"
           },
           "cosmosDbName": {
             "value": "[parameters('cosmosDbName')]"
@@ -16849,7 +16626,7 @@
         "mode": "Incremental",
         "parameters": {
           "containerRegistryName": {
-            "value": "[toLower(format('{0}acr{1}', parameters('namePrefix'), uniqueString(variables('resourceGroupId'))))]"
+            "value": "[variables('resolvedAcrName')]"
           },
           "location": {
             "value": "[parameters('location')]"
@@ -20393,7 +20170,7 @@
         "mode": "Incremental",
         "parameters": {
           "name": {
-            "value": "[toLower(format('{0}-asp-{1}', parameters('namePrefix'), uniqueString(variables('resourceGroupId'))))]"
+            "value": "[variables('resolvedAspName')]"
           },
           "location": {
             "value": "[parameters('location')]"
@@ -20498,7 +20275,7 @@
         "mode": "Incremental",
         "parameters": {
           "aiFoundryBaseName": {
-            "value": "[substring(toLower(uniqueString(format('ai-{0}-{1}-{2}', parameters('namePrefix'), parameters('environment'), resourceGroup().id))), 0, 12)]"
+            "value": "[variables('resolvedAiFoundryBaseName')]"
           },
           "roleAssignedManagedIdentityPrincipalIds": {
             "value": [
@@ -42995,360 +42772,6 @@
         "privateDns",
         "userAssignedIdentity"
       ]
-    },
-    "bastion": {
-      "condition": "[and(parameters('isPrivate'), parameters('deployJumpbox'))]",
-      "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2025-04-01",
-      "name": "[format('bastionDeployment.{0}', variables('shortHash'))]",
-      "properties": {
-        "expressionEvaluationOptions": {
-          "scope": "inner"
-        },
-        "mode": "Incremental",
-        "parameters": {
-          "name": {
-            "value": "[toLower(format('{0}-bastion-{1}', parameters('namePrefix'), uniqueString(variables('resourceGroupId'))))]"
-          },
-          "location": {
-            "value": "[parameters('location')]"
-          },
-          "subnetId": {
-            "value": "[reference('network').outputs.bastionSubnetId.value]"
-          },
-          "sku": {
-            "value": "[parameters('bastionSku')]"
-          },
-          "tags": {
-            "value": "[variables('tags')]"
-          }
-        },
-        "template": {
-          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-          "contentVersion": "1.0.0.0",
-          "metadata": {
-            "_generator": {
-              "name": "bicep",
-              "version": "0.42.1.51946",
-              "templateHash": "9423121226804345673"
-            }
-          },
-          "parameters": {
-            "location": {
-              "type": "string",
-              "defaultValue": "[resourceGroup().location]",
-              "metadata": {
-                "description": "Location for the bastion host"
-              }
-            },
-            "name": {
-              "type": "string",
-              "metadata": {
-                "description": "Bastion host name"
-              }
-            },
-            "subnetId": {
-              "type": "string",
-              "metadata": {
-                "description": "AzureBastionSubnet resource id"
-              }
-            },
-            "sku": {
-              "type": "string",
-              "defaultValue": "Standard",
-              "allowedValues": [
-                "Basic",
-                "Standard"
-              ],
-              "metadata": {
-                "description": "SKU: Basic or Standard. Standard required for native-client / SSH tunneling."
-              }
-            },
-            "tags": {
-              "type": "object",
-              "defaultValue": {},
-              "metadata": {
-                "description": "Tags for resources"
-              }
-            }
-          },
-          "resources": [
-            {
-              "type": "Microsoft.Network/publicIPAddresses",
-              "apiVersion": "2023-11-01",
-              "name": "[format('{0}-pip', parameters('name'))]",
-              "location": "[parameters('location')]",
-              "tags": "[parameters('tags')]",
-              "sku": {
-                "name": "Standard"
-              },
-              "properties": {
-                "publicIPAllocationMethod": "Static",
-                "publicIPAddressVersion": "IPv4"
-              }
-            },
-            {
-              "type": "Microsoft.Network/bastionHosts",
-              "apiVersion": "2023-11-01",
-              "name": "[parameters('name')]",
-              "location": "[parameters('location')]",
-              "tags": "[parameters('tags')]",
-              "sku": {
-                "name": "[parameters('sku')]"
-              },
-              "properties": {
-                "enableTunneling": "[if(equals(parameters('sku'), 'Standard'), true(), false())]",
-                "enableShareableLink": false,
-                "ipConfigurations": [
-                  {
-                    "name": "ipConfig",
-                    "properties": {
-                      "subnet": {
-                        "id": "[parameters('subnetId')]"
-                      },
-                      "publicIPAddress": {
-                        "id": "[resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip', parameters('name')))]"
-                      }
-                    }
-                  }
-                ]
-              },
-              "dependsOn": [
-                "[resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip', parameters('name')))]"
-              ]
-            }
-          ],
-          "outputs": {
-            "bastionId": {
-              "type": "string",
-              "value": "[resourceId('Microsoft.Network/bastionHosts', parameters('name'))]"
-            },
-            "bastionName": {
-              "type": "string",
-              "value": "[parameters('name')]"
-            },
-            "publicIpAddress": {
-              "type": "string",
-              "value": "[reference(resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip', parameters('name'))), '2023-11-01').ipAddress]"
-            }
-          }
-        }
-      },
-      "dependsOn": [
-        "network"
-      ]
-    },
-    "jumpbox": {
-      "condition": "[and(parameters('isPrivate'), parameters('deployJumpbox'))]",
-      "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2025-04-01",
-      "name": "[format('jumpboxDeployment.{0}', variables('shortHash'))]",
-      "properties": {
-        "expressionEvaluationOptions": {
-          "scope": "inner"
-        },
-        "mode": "Incremental",
-        "parameters": {
-          "name": {
-            "value": "[toLower(format('{0}-jump-{1}', parameters('namePrefix'), uniqueString(variables('resourceGroupId'))))]"
-          },
-          "location": {
-            "value": "[parameters('location')]"
-          },
-          "subnetId": {
-            "value": "[reference('network').outputs.jumpboxSubnetId.value]"
-          },
-          "adminUsername": {
-            "value": "[parameters('jumpboxAdminUsername')]"
-          },
-          "adminPassword": {
-            "value": "[parameters('jumpboxAdminPassword')]"
-          },
-          "userAssignedIdentityId": {
-            "value": "[reference('userAssignedIdentity').outputs.resourceId.value]"
-          },
-          "tags": {
-            "value": "[variables('tags')]"
-          }
-        },
-        "template": {
-          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-          "contentVersion": "1.0.0.0",
-          "metadata": {
-            "_generator": {
-              "name": "bicep",
-              "version": "0.42.1.51946",
-              "templateHash": "5149576106587506965"
-            }
-          },
-          "parameters": {
-            "location": {
-              "type": "string",
-              "defaultValue": "[resourceGroup().location]",
-              "metadata": {
-                "description": "Location for the VM"
-              }
-            },
-            "name": {
-              "type": "string",
-              "metadata": {
-                "description": "VM name"
-              }
-            },
-            "subnetId": {
-              "type": "string",
-              "metadata": {
-                "description": "Subnet id for the VM NIC"
-              }
-            },
-            "vmSize": {
-              "type": "string",
-              "defaultValue": "Standard_D2s_v5",
-              "metadata": {
-                "description": "VM size. Default sized for az cli + dev tooling."
-              }
-            },
-            "adminUsername": {
-              "type": "string",
-              "defaultValue": "azureuser",
-              "metadata": {
-                "description": "Admin username for RDP (accessed via Bastion)"
-              }
-            },
-            "adminPassword": {
-              "type": "securestring",
-              "metadata": {
-                "description": "Admin password used to log in (via Bastion RDP). Must satisfy Azure Windows VM password complexity rules."
-              }
-            },
-            "userAssignedIdentityId": {
-              "type": "string",
-              "metadata": {
-                "description": "User-assigned managed identity resource id to attach to the VM"
-              }
-            },
-            "tags": {
-              "type": "object",
-              "defaultValue": {},
-              "metadata": {
-                "description": "Tags for resources"
-              }
-            }
-          },
-          "variables": {
-            "bootstrapScript": "$ErrorActionPreference = \"Continue\"\n$ProgressPreference     = \"SilentlyContinue\"\nStart-Transcript -Path \"C:\\\\Windows\\\\Temp\\\\jumpbox-bootstrap.log\" -Append\n\n# Trust PSGallery + ensure TLS 1.2\n[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12\n\n# 1) Install Chocolatey (used to install az cli, git, bicep)\nif (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) {\n  Set-ExecutionPolicy Bypass -Scope Process -Force\n  iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))\n}\n\n$env:Path = \"$env:Path;C:\\\\ProgramData\\\\chocolatey\\\\bin\"\n\n# 2) Operator tools\nchoco install -y --no-progress azure-cli\nchoco install -y --no-progress git\nchoco install -y --no-progress bicep\nchoco install -y --no-progress microsoft-edge\n\n# 3) Docker EE on Windows Server (best-effort; safe to fail — `az acr build`\n#    is the recommended path for image builds from the jumpbox).\ntry {\n  Install-WindowsFeature -Name Containers -IncludeManagementTools -ErrorAction SilentlyContinue\n  Install-Module -Name DockerMsftProvider -Repository PSGallery -Force -ErrorAction SilentlyContinue\n  Install-Package -Name docker -ProviderName DockerMsftProvider -Force -ErrorAction SilentlyContinue\n} catch {\n  Write-Host \"Docker install skipped: $_\"\n}\n\n# 4) Clone the sample repo to the operator desktop for convenience\n$repoDir = \"C:\\\\Users\\\\Public\\\\Desktop\\\\Agentic-AI-Investment-Analysis-Sample\"\nif (-not (Test-Path $repoDir)) {\n  & \"C:\\\\Program Files\\\\Git\\\\bin\\\\git.exe\" clone https://github.com/Azure-Samples/Agentic-AI-Investment-Analysis-Sample.git $repoDir 2>&1 | Out-Null\n}\n\nStop-Transcript\n"
-          },
-          "resources": [
-            {
-              "type": "Microsoft.Network/networkInterfaces",
-              "apiVersion": "2023-11-01",
-              "name": "[format('{0}-nic', parameters('name'))]",
-              "location": "[parameters('location')]",
-              "tags": "[parameters('tags')]",
-              "properties": {
-                "ipConfigurations": [
-                  {
-                    "name": "ipconfig",
-                    "properties": {
-                      "subnet": {
-                        "id": "[parameters('subnetId')]"
-                      },
-                      "privateIPAllocationMethod": "Dynamic"
-                    }
-                  }
-                ]
-              }
-            },
-            {
-              "type": "Microsoft.Compute/virtualMachines",
-              "apiVersion": "2024-03-01",
-              "name": "[parameters('name')]",
-              "location": "[parameters('location')]",
-              "tags": "[parameters('tags')]",
-              "identity": {
-                "type": "UserAssigned",
-                "userAssignedIdentities": {
-                  "[format('{0}', parameters('userAssignedIdentityId'))]": {}
-                }
-              },
-              "properties": {
-                "hardwareProfile": {
-                  "vmSize": "[parameters('vmSize')]"
-                },
-                "storageProfile": {
-                  "imageReference": {
-                    "publisher": "MicrosoftWindowsServer",
-                    "offer": "WindowsServer",
-                    "sku": "2022-datacenter-azure-edition",
-                    "version": "latest"
-                  },
-                  "osDisk": {
-                    "createOption": "FromImage",
-                    "managedDisk": {
-                      "storageAccountType": "StandardSSD_LRS"
-                    }
-                  }
-                },
-                "osProfile": {
-                  "computerName": "[take(replace(parameters('name'), '-', ''), 15)]",
-                  "adminUsername": "[parameters('adminUsername')]",
-                  "adminPassword": "[parameters('adminPassword')]",
-                  "windowsConfiguration": {
-                    "enableAutomaticUpdates": true,
-                    "provisionVMAgent": true
-                  }
-                },
-                "networkProfile": {
-                  "networkInterfaces": [
-                    {
-                      "id": "[resourceId('Microsoft.Network/networkInterfaces', format('{0}-nic', parameters('name')))]"
-                    }
-                  ]
-                }
-              },
-              "dependsOn": [
-                "[resourceId('Microsoft.Network/networkInterfaces', format('{0}-nic', parameters('name')))]"
-              ]
-            },
-            {
-              "type": "Microsoft.Compute/virtualMachines/extensions",
-              "apiVersion": "2024-03-01",
-              "name": "[format('{0}/{1}', parameters('name'), 'bootstrap')]",
-              "location": "[parameters('location')]",
-              "properties": {
-                "publisher": "Microsoft.Compute",
-                "type": "CustomScriptExtension",
-                "typeHandlerVersion": "1.10",
-                "autoUpgradeMinorVersion": true,
-                "settings": {
-                  "script": "[base64(variables('bootstrapScript'))]"
-                }
-              },
-              "dependsOn": [
-                "[resourceId('Microsoft.Compute/virtualMachines', parameters('name'))]"
-              ]
-            }
-          ],
-          "outputs": {
-            "vmId": {
-              "type": "string",
-              "value": "[resourceId('Microsoft.Compute/virtualMachines', parameters('name'))]"
-            },
-            "vmName": {
-              "type": "string",
-              "value": "[parameters('name')]"
-            },
-            "nicPrivateIp": {
-              "type": "string",
-              "value": "[reference(resourceId('Microsoft.Network/networkInterfaces', format('{0}-nic', parameters('name'))), '2023-11-01').ipConfigurations[0].properties.privateIPAddress]"
-            }
-          }
-        }
-      },
-      "dependsOn": [
-        "network",
-        "userAssignedIdentity"
-      ]
     }
   },
   "outputs": {
@@ -43427,14 +42850,6 @@
     "vnetId": {
       "type": "string",
       "value": "[if(parameters('isPrivate'), reference('network').outputs.vnetId.value, '')]"
-    },
-    "jumpboxName": {
-      "type": "string",
-      "value": "[if(and(parameters('isPrivate'), parameters('deployJumpbox')), reference('jumpbox').outputs.vmName.value, '')]"
-    },
-    "bastionName": {
-      "type": "string",
-      "value": "[if(and(parameters('isPrivate'), parameters('deployJumpbox')), reference('bastion').outputs.bastionName.value, '')]"
     }
   }
 }

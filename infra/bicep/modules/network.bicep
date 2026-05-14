@@ -1,11 +1,15 @@
 // Virtual network + subnets + NSGs for zero-trust deployment.
-// Six subnets:
-//   snet-aca-infra   (/23) — delegated to Microsoft.App/environments (workload-profiles ACA)
-//   snet-pe          (/26) — shared Private Endpoints
-//   snet-jumpbox     (/27) — jump VM NIC
-//   AzureBastionSubnet (/26) — required name for Azure Bastion
-//   snet-build       (/27) — reserved for ACR Tasks / private build agents
-//   snet-mgmt        (/27) — reserved for future self-hosted CI/CD agents
+//
+// The customer allocates a single /26 (64 IPs) for this workload. It is split
+// into two equal /27 subnets:
+//   snet-services (/27) — App Service VNet integration (delegated to
+//                         Microsoft.Web/serverFarms). All outbound calls from
+//                         the API/Web apps egress here.
+//   snet-pe       (/27) — Shared Private Endpoints for ACR, Storage, Cosmos,
+//                         AI Foundry, and Azure Monitor Private Link Scope.
+//
+// Operator access (build/deploy) is assumed to come from the customer's peered
+// network (ExpressRoute / VPN / hub VNet). There is no Bastion and no jumpbox.
 
 @description('Location for all resources')
 param location string = resourceGroup().location
@@ -13,11 +17,17 @@ param location string = resourceGroup().location
 @description('Virtual network name')
 param vnetName string
 
-@description('Address space for the virtual network')
-param vnetAddressPrefix string = '10.50.0.0/16'
+@description('Address space for the virtual network. MUST be a /26 supplied by the customer (e.g. 10.123.45.0/26).')
+param vnetAddressPrefix string
 
 @description('Tags for resources')
 param tags object = {}
+
+// Two equal /27 subnets derived from the supplied /26.
+//   offset 0  → snet-services (App Service delegation)
+//   offset 1  → snet-pe       (private endpoints)
+var servicesSubnetPrefix = cidrSubnet(vnetAddressPrefix, 27, 0)
+var peSubnetPrefix       = cidrSubnet(vnetAddressPrefix, 27, 1)
 
 // ---- NSGs -------------------------------------------------------------------
 
@@ -44,102 +54,12 @@ resource nsgPe 'Microsoft.Network/networkSecurityGroups@2023-11-01' = {
   }
 }
 
-resource nsgJumpbox 'Microsoft.Network/networkSecurityGroups@2023-11-01' = {
-  name: '${vnetName}-nsg-jumpbox'
-  location: location
-  tags: tags
-  properties: {
-    securityRules: [
-      {
-        name: 'AllowBastionInbound'
-        properties: {
-          priority: 100
-          direction: 'Inbound'
-          access: 'Allow'
-          protocol: 'Tcp'
-          sourceAddressPrefix: 'VirtualNetwork'
-          sourcePortRange: '*'
-          destinationAddressPrefix: 'VirtualNetwork'
-          destinationPortRanges: [ '22', '3389' ]
-        }
-      }
-    ]
-  }
-}
-
-resource nsgBastion 'Microsoft.Network/networkSecurityGroups@2023-11-01' = {
-  name: '${vnetName}-nsg-bastion'
-  location: location
-  tags: tags
-  properties: {
-    securityRules: [
-      {
-        name: 'AllowHttpsInbound'
-        properties: { priority: 120, direction: 'Inbound', access: 'Allow', protocol: 'Tcp', sourceAddressPrefix: 'Internet', sourcePortRange: '*', destinationAddressPrefix: '*', destinationPortRange: '443' }
-      }
-      {
-        name: 'AllowGatewayManagerInbound'
-        properties: { priority: 130, direction: 'Inbound', access: 'Allow', protocol: 'Tcp', sourceAddressPrefix: 'GatewayManager', sourcePortRange: '*', destinationAddressPrefix: '*', destinationPortRange: '443' }
-      }
-      {
-        name: 'AllowAzureLoadBalancerInbound'
-        properties: { priority: 140, direction: 'Inbound', access: 'Allow', protocol: 'Tcp', sourceAddressPrefix: 'AzureLoadBalancer', sourcePortRange: '*', destinationAddressPrefix: '*', destinationPortRange: '443' }
-      }
-      {
-        name: 'AllowBastionHostCommunication'
-        properties: { priority: 150, direction: 'Inbound', access: 'Allow', protocol: '*', sourceAddressPrefix: 'VirtualNetwork', sourcePortRange: '*', destinationAddressPrefix: 'VirtualNetwork', destinationPortRanges: [ '8080', '5701' ] }
-      }
-      {
-        name: 'AllowSshRdpOutbound'
-        properties: { priority: 100, direction: 'Outbound', access: 'Allow', protocol: '*', sourceAddressPrefix: '*', sourcePortRange: '*', destinationAddressPrefix: 'VirtualNetwork', destinationPortRanges: [ '22', '3389' ] }
-      }
-      {
-        name: 'AllowAzureCloudOutbound'
-        properties: { priority: 110, direction: 'Outbound', access: 'Allow', protocol: 'Tcp', sourceAddressPrefix: '*', sourcePortRange: '*', destinationAddressPrefix: 'AzureCloud', destinationPortRange: '443' }
-      }
-      {
-        name: 'AllowBastionCommunication'
-        properties: { priority: 120, direction: 'Outbound', access: 'Allow', protocol: '*', sourceAddressPrefix: 'VirtualNetwork', sourcePortRange: '*', destinationAddressPrefix: 'VirtualNetwork', destinationPortRanges: [ '8080', '5701' ] }
-      }
-      {
-        name: 'AllowGetSessionInformation'
-        properties: { priority: 130, direction: 'Outbound', access: 'Allow', protocol: '*', sourceAddressPrefix: '*', sourcePortRange: '*', destinationAddressPrefix: 'Internet', destinationPortRange: '80' }
-      }
-    ]
-  }
-}
-
-resource nsgAca 'Microsoft.Network/networkSecurityGroups@2023-11-01' = {
-  name: '${vnetName}-nsg-aca'
-  location: location
-  tags: tags
-  properties: {
-    // Intentionally permissive within the VNet; ACA platform manages its own
-    // subnet rules. Do not block traffic — see Azure docs for ACA NSG limits.
-    securityRules: []
-  }
-}
-
-resource nsgBuild 'Microsoft.Network/networkSecurityGroups@2023-11-01' = {
-  name: '${vnetName}-nsg-build'
-  location: location
-  tags: tags
-  properties: { securityRules: [] }
-}
-
-resource nsgMgmt 'Microsoft.Network/networkSecurityGroups@2023-11-01' = {
-  name: '${vnetName}-nsg-mgmt'
-  location: location
-  tags: tags
-  properties: { securityRules: [] }
-}
-
-resource nsgAppSvc 'Microsoft.Network/networkSecurityGroups@2023-11-01' = {
-  name: '${vnetName}-nsg-appsvc'
+resource nsgServices 'Microsoft.Network/networkSecurityGroups@2023-11-01' = {
+  name: '${vnetName}-nsg-services'
   location: location
   tags: tags
   // Permissive within VNet; App Service regional VNet integration handles
-  // outbound traffic; inbound is via separate private endpoint in snet-pe.
+  // outbound traffic; inbound is via separate private endpoints in snet-pe.
   properties: { securityRules: [] }
 }
 
@@ -155,61 +75,10 @@ resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = {
     }
     subnets: [
       {
-        name: 'snet-aca-infra'
+        name: 'snet-services'
         properties: {
-          addressPrefix: '10.50.0.0/23'
-          networkSecurityGroup: { id: nsgAca.id }
-          delegations: [
-            {
-              name: 'aca-delegation'
-              properties: { serviceName: 'Microsoft.App/environments' }
-            }
-          ]
-          privateEndpointNetworkPolicies: 'Disabled'
-        }
-      }
-      {
-        name: 'snet-pe'
-        properties: {
-          addressPrefix: '10.50.2.0/26'
-          networkSecurityGroup: { id: nsgPe.id }
-          privateEndpointNetworkPolicies: 'Disabled'
-        }
-      }
-      {
-        name: 'snet-jumpbox'
-        properties: {
-          addressPrefix: '10.50.2.64/27'
-          networkSecurityGroup: { id: nsgJumpbox.id }
-        }
-      }
-      {
-        name: 'AzureBastionSubnet'
-        properties: {
-          addressPrefix: '10.50.2.128/26'
-          networkSecurityGroup: { id: nsgBastion.id }
-        }
-      }
-      {
-        name: 'snet-build'
-        properties: {
-          addressPrefix: '10.50.2.192/27'
-          networkSecurityGroup: { id: nsgBuild.id }
-          privateEndpointNetworkPolicies: 'Disabled'
-        }
-      }
-      {
-        name: 'snet-mgmt'
-        properties: {
-          addressPrefix: '10.50.2.224/27'
-          networkSecurityGroup: { id: nsgMgmt.id }
-        }
-      }
-      {
-        name: 'snet-appsvc'
-        properties: {
-          addressPrefix: '10.50.4.0/26'
-          networkSecurityGroup: { id: nsgAppSvc.id }
+          addressPrefix: servicesSubnetPrefix
+          networkSecurityGroup: { id: nsgServices.id }
           delegations: [
             {
               name: 'appsvc-delegation'
@@ -221,16 +90,19 @@ resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = {
           ]
         }
       }
+      {
+        name: 'snet-pe'
+        properties: {
+          addressPrefix: peSubnetPrefix
+          networkSecurityGroup: { id: nsgPe.id }
+          privateEndpointNetworkPolicies: 'Disabled'
+        }
+      }
     ]
   }
 }
 
 output vnetId string = vnet.id
 output vnetName string = vnet.name
-output acaInfraSubnetId string = '${vnet.id}/subnets/snet-aca-infra'
 output peSubnetId string = '${vnet.id}/subnets/snet-pe'
-output jumpboxSubnetId string = '${vnet.id}/subnets/snet-jumpbox'
-output bastionSubnetId string = '${vnet.id}/subnets/AzureBastionSubnet'
-output buildSubnetId string = '${vnet.id}/subnets/snet-build'
-output mgmtSubnetId string = '${vnet.id}/subnets/snet-mgmt'
-output appSvcSubnetId string = '${vnet.id}/subnets/snet-appsvc'
+output appSvcSubnetId string = '${vnet.id}/subnets/snet-services'

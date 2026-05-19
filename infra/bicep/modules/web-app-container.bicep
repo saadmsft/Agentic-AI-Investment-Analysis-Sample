@@ -128,8 +128,8 @@ resource site 'Microsoft.Web/sites@2024-04-01' = {
   }
 }
 
-// Private endpoint for inbound traffic (only when isPrivate=true).
-resource pe 'Microsoft.Network/privateEndpoints@2024-05-01' = if (isPrivate) {
+// Private endpoint for inbound traffic (only when isPrivate=true and a PE subnet is supplied).
+resource pe 'Microsoft.Network/privateEndpoints@2024-05-01' = if (isPrivate && !empty(privateEndpointSubnetId)) {
   name: '${name}-pe'
   location: location
   tags: tags
@@ -149,7 +149,7 @@ resource pe 'Microsoft.Network/privateEndpoints@2024-05-01' = if (isPrivate) {
   }
 }
 
-resource peDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (isPrivate) {
+resource peDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (isPrivate && !empty(privateEndpointSubnetId) && !empty(appServicePrivateDnsZoneId)) {
   name: 'default'
   parent: pe
   properties: {

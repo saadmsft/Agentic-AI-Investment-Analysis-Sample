@@ -24,7 +24,7 @@ It is the companion to:
 | Operator access            | **No Bastion, no jumpbox is provisioned by the template**. Operators run scripts 2 & 3 from a workstation reachable via ExpressRoute / VPN / hub peering |
 | Egress from apps           | Routed through the VNet (`WEBSITE_VNET_ROUTE_ALL=1`) to Private Endpoints + service endpoint for AI Foundry                                              |
 | Identity                   | One User-Assigned Managed Identity (UAMI) federated to both apps. No keys, no shared secrets                                                             |
-| Validated end-to-end       | Yes — Mac (public) is `403`/blocked, peered VM (private) returns `HTTP 200` for both apps via PE                                                         |
+| Validated end-to-end       | Yes — IVC mode (`investcorpEnv=true`) deployed in `swedencentral`, both apps return `HTTP 200` after the documented temp public-access exceptions; see Appendix D for the full playbook                |
 | Estimated monthly Azure $$ | ≈ **US $620 – 780 / month** at idle in Sweden Central (see §3.3). Excludes Foundry token consumption.                                                    |
 
 ---
@@ -262,15 +262,9 @@ The Private Endpoint on `services.ai.azure.com` already exists, so apps continue
 
 See §5.2 group C. If the operator is on a fully air-gapped corporate network, mirror those URLs internally before running script 2 (recommended for production InvestCorp deployments).
 
-### 6.5 Known repo issue to be aware of
+### 6.5 ARM deployment-name search (resolved)
 
-The current `infra/1-deploy-azure-infra.sh` names its ARM deployment `ai-invest-sample-<timestamp>` but `infra/3-deploy-apps.sh` searches for `ai-invest-appsvc`. Two workarounds:
-
-1. **Pre-flight**: rerun main.bicep manually with a name containing `ai-invest-appsvc`, e.g.
-   `az deployment group create -g <rg> -n "ai-invest-appsvc-$(date +%s)" --template-file infra/bicep/main.bicep --parameters @<your.bicepparam>`
-2. **Patch**: change the JMESPath query in `3-deploy-apps.sh` at line 163 to `[?contains(name, 'ai-invest-sample')].name | [0]`.
-
-A fix will be raised upstream.
+Earlier revisions of `infra/1-deploy-azure-infra.sh` and `infra/3-deploy-apps.sh` looked for two different ARM deployment names (`ai-invest-sample-<ts>` vs `ai-invest-appsvc`). This is **resolved** in the current main branch: script 3 now searches for `ai-invest-sample`. No manual patching required.
 
 ---
 
@@ -383,20 +377,64 @@ az webapp stop -g rg-investcorp-aiinvest-prod -n invstcrp-web-prod
 
 ## 11. Validation evidence (May 2026 demo deployment)
 
-| Check                                              | Result                                                                |
-| -------------------------------------------------- | --------------------------------------------------------------------- |
-| Bicep template `what-if` (no errors, BCP318 warns) | ✅                                                                    |
-| Workload deployment (`isPrivate=true`)             | ✅ `Succeeded`                                                        |
-| Private DNS resolution from peered VM              | ✅ ACR=`10.123.45.50`, Cosmos=`10.123.45.52`, Storage=`10.123.45.51`  |
-| TCP 443 to all PEs                                 | ✅ True                                                               |
-| ACR `/v2/` over PE                                 | ✅ HTTP 401 (auth required)                                           |
-| Apps via PE (`10.123.45.54` / `.55`)               | ✅ HTTP 200                                                           |
-| Apps from public internet                          | ✅ HTTP 403 (blocked)                                                 |
-| Mac (non-peered) to ACR / Storage                  | ✅ HTTP 403 (blocked)                                                 |
+Deployment was validated against `MCAPS-Hybrid-AI&HPC-Saad` / `swedencentral` with `investcorpEnv=true`. The template does **not** provision a Bastion, jumpbox, or any VM — operator commands were issued from the local workstation using the temporary public-access exceptions documented in Appendix D, then reverted.
+
+| Check                                                                       | Result                                                                |
+| --------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `az bicep build` (only BCP318 warnings, no errors)                          | ✅                                                                    |
+| `1-deploy-azure-infra.sh` with `--parameters-file ...investcorp...`         | ✅ `Succeeded`                                                        |
+| IVC invariants: 0 NSGs, 0 private DNS zones, 0 private endpoints in the RG  | ✅ (proves customer-managed networking left intact)                   |
+| All 13 customer-requested resource names applied (11 by bicepparam + 2 by script 3) | ✅                                                                    |
+| `2-build-and-push-images.sh --acr` (ACR Tasks, no local Docker)             | ✅ `ai-invest-api:latest` + `ai-invest-web:latest` pushed             |
+| `3-deploy-apps.sh --api-app-name ... --web-app-name ...`                    | ✅ both Web Apps deployed with the IVC names                          |
+| `curl /health` against API (after temp `publicNetworkAccess=Enabled`)       | ✅ HTTP 200                                                           |
+| `curl /` against Web (after temp `publicNetworkAccess=Enabled`)             | ✅ HTTP 200                                                           |
+| Apps from public internet **after revert** (`publicNetworkAccess=Disabled`) | ✅ HTTP 403 (blocked — only the customer's PEs are reachable)         |
 
 ---
 
 ## 12. Custom naming convention (InvestCorp CAF)
+
+> **InvestCorp naming standard — what was applied in the validated deployment**
+>
+> The customer's naming team supplied an exact name for each resource. Some of those names had to be adjusted to satisfy hard Azure / AVM constraints; every adjustment is called out in the *Adjustment* column below. The values shown here are the same ones used in `infra/bicep/main.investcorp.example.bicepparam` and validated end-to-end (see Appendix D).
+>
+> **Pattern (logical):** `<workload>-<env>-<service>-<region>-<instance>` for hyphenated services, and `<svc><env><workload><region><instance>` (no separators) for resources that disallow `-` (storage, ACR). `partnerfirms` is the InvestCorp workload code. `eus2` was the original region tag — keep this tag stable even if the deployment region changes (it is a label, not a region lookup).
+>
+> **Required override flag:** every name is supplied via the matching `*NameOverride` parameter (see Option B table below). If you skip an override, the deployer falls back to the hash-based default in Option A.
+
+| #  | Resource                          | Customer-requested name                              | Adjustment (if any)                                                                                       | Override parameter                     |
+| -- | --------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| 1  | Virtual Network                   | `vnet-dev-aifoundry-eus2-01`                         | —                                                                                                         | `vnetNameOverride`                     |
+| 2  | User-Assigned Managed Identity    | `partnerfirms-dev-mngdid-01`                         | —                                                                                                         | `userAssignedIdentityNameOverride`     |
+| 3  | Log Analytics Workspace           | `log-analytics-ws-dev-partnerfirms-eus2-01`          | —                                                                                                         | `logAnalyticsWorkspaceNameOverride`    |
+| 4  | Application Insights              | `appinsights-app-dev-ivc-aifoundry-partnerfirms`     | —                                                                                                         | `appInsightsNameOverride`              |
+| 5  | AMPLS (Monitor Private Link Scope)| `az-monitor-pls-partnerfirms-eus2-01`                | —                                                                                                         | `amplsNameOverride`                    |
+| 6  | Storage Account                   | `strgdevpartnerfirmseus20`                           | **Trimmed from `strgdevpartnerfirmseus201` (25 chars) to `strgdevpartnerfirmseus20` (24 chars max).** Confirm with customer naming team before prod. | `storageAccountNameOverride`           |
+| 7  | Cosmos DB Account                 | `cosmosdb-dev-partnerfirms-ne-01`                    | —                                                                                                         | `cosmosAccountNameOverride`            |
+| 8  | Azure Container Registry          | `regpartnerfirmseus201`                              | —                                                                                                         | `containerRegistryNameOverride`        |
+| 9  | App Service Plan                  | `asp-app-dev-ivc-aifoundry-partnerfirms`             | —                                                                                                         | `appServicePlanNameOverride`           |
+| 10 | AI Foundry account (base)         | `aifoundrypf`                                        | **AVM `baseName` is capped at 12 chars.** The full preferred name (`aifoundry-dev-partnerfirms-eus2-01`) cannot fit. `pf` = partnerfirms. | `aiFoundryBaseNameOverride`            |
+| 11 | AI Foundry project                | `aiivcpartnerfirms-project`                          | —                                                                                                         | `aiFoundryProjectNameOverride`         |
+| 12 | API App Service                   | `app-dev-ivc-aifoundry-partnerfirms-01`              | Set at Phase 3 (Web Apps are deployed by `3-deploy-apps.sh`, not by `main.bicep`)                          | `--api-app-name` flag (script 3)       |
+| 13 | Web App Service                   | `app-dev-ivc-aifoundry-partnerfirms-02`              | Same — Phase 3                                                                                            | `--web-app-name` flag (script 3)       |
+
+### 12.1 Hard naming constraints to know before you submit names
+
+| Resource          | Length      | Allowed chars                          | Scope of uniqueness          |
+| ----------------- | ----------- | -------------------------------------- | ---------------------------- |
+| Storage account   | **3–24**    | lowercase a-z + 0-9 only (no `-`/`_`)  | **Global**                   |
+| Container Registry| 5–50        | a-z A-Z 0-9 only (no `-`/`_`)          | **Global**                   |
+| Cosmos DB account | 3–44        | a-z 0-9 `-`                            | **Global**                   |
+| AI Foundry baseName| **≤ 12**   | lowercase a-z 0-9 (AVM module limit)   | Per-region uniqueness OK     |
+| Key Vault (n/a here)| 3–24       | a-z A-Z 0-9 `-`                        | Global                       |
+| Virtual Network   | 2–64        | a-z A-Z 0-9 `-` `_` `.`                | Per-resource-group           |
+| UAMI              | 3–128       | a-z A-Z 0-9 `-` `_`                    | Per-resource-group           |
+| Log Analytics WS  | 4–63        | a-z A-Z 0-9 `-`                        | Per-resource-group           |
+| App Insights      | 1–260       | most chars                             | Per-resource-group           |
+| AMPLS             | 1–255       | most chars                             | Per-resource-group           |
+| App Service Plan  | 1–40        | a-z A-Z 0-9 `-`                        | Per-resource-group           |
+| Web App           | 2–60        | a-z A-Z 0-9 `-` (not starting/ending with `-`) | **Global** (DNS)     |
 
 The template supports two ways to control resource names. Pick one:
 
@@ -426,6 +464,8 @@ You get `invscrp-vnet-…`, `invscrp-cosmosdb-…`, `invscrpacr…`, etc. **The 
 | `containerRegistryNameOverride`      | Azure Container Registry       | **5-50 alphanumerics, globally unique**        |
 | `appServicePlanNameOverride`         | App Service Plan               | 1-40 alphanumerics + `-`                       |
 | `aiFoundryBaseNameOverride`          | AI Foundry account base name   | **≤ 12 lowercase alphanumerics** (suffix base) |
+| `aiFoundryProjectNameOverride`       | AI Foundry project             | 2-32 alphanumerics + `-` (default `aiinvest-project`) |
+| `investcorpEnv`                      | Toggle managed-network mode    | `bool`, see §12.3                              |
 
 A worked example is provided in [`infra/bicep/main.investcorp.example.bicepparam`](../infra/bicep/main.investcorp.example.bicepparam):
 
@@ -433,40 +473,70 @@ A worked example is provided in [`infra/bicep/main.investcorp.example.bicepparam
 using './main.bicep'
 
 param isPrivate = true
+param investcorpEnv = true                       // IVC mode (see §12.3)
 param vnetAddressPrefix = '10.123.45.0/26'
-param environment = 'prod'
-param namePrefix = 'invscrp'
+param environment = 'dev'
+param namePrefix = 'invstdemo'
 
-param vnetNameOverride               = 'invs-aiinv-prod-bhc-vnet-001'
-param userAssignedIdentityNameOverride = 'invs-aiinv-prod-bhc-uami-001'
-param logAnalyticsWorkspaceNameOverride = 'invs-aiinv-prod-bhc-law-001'
-param appInsightsNameOverride        = 'invs-aiinv-prod-bhc-appi-001'
-param amplsNameOverride              = 'invs-aiinv-prod-bhc-ampls-001'
-param storageAccountNameOverride     = 'invsaiinvprodbhcst001'
-param cosmosAccountNameOverride      = 'invs-aiinv-prod-bhc-cosmos-001'
-param containerRegistryNameOverride  = 'invsaiinvprodbhcacr001'
-param appServicePlanNameOverride     = 'invs-aiinv-prod-bhc-asp-001'
-param aiFoundryBaseNameOverride      = 'invscaip01'
+param vnetNameOverride                  = 'vnet-dev-aifoundry-eus2-01'
+param userAssignedIdentityNameOverride  = 'partnerfirms-dev-mngdid-01'
+param logAnalyticsWorkspaceNameOverride = 'log-analytics-ws-dev-partnerfirms-eus2-01'
+param appInsightsNameOverride           = 'appinsights-app-dev-ivc-aifoundry-partnerfirms'
+param amplsNameOverride                 = 'az-monitor-pls-partnerfirms-eus2-01'
+param storageAccountNameOverride        = 'strgdevpartnerfirmseus20'              // 24-char max
+param cosmosAccountNameOverride         = 'cosmosdb-dev-partnerfirms-ne-01'
+param containerRegistryNameOverride     = 'regpartnerfirmseus201'
+param appServicePlanNameOverride        = 'asp-app-dev-ivc-aifoundry-partnerfirms'
+param aiFoundryBaseNameOverride         = 'aifoundrypf'                           // 12-char AVM limit
+param aiFoundryProjectNameOverride      = 'aiivcpartnerfirms-project'
 ```
 
 Deploy with:
 
 ```bash
-az deployment group create -g $RG \
-  --name "ai-invest-appsvc-$(date +%s)" \
-  --template-file infra/bicep/main.bicep \
-  --parameters infra/bicep/main.investcorp.example.bicepparam
+./infra/1-deploy-azure-infra.sh \
+  -g $RG \
+  -l eastus2 \
+  --parameters-file infra/bicep/main.investcorp.example.bicepparam
 ```
 
 > **Caller is responsible** for the naming rules listed above (storage/ACR/Cosmos in particular). If a name violates Azure rules or is already taken globally, the deployment will fail with a clear error from the resource provider.
 
-### App Service (api/web) names
+### 12.3 `investcorpEnv=true` — customer-managed networking mode
 
-The two Web App names are generated by `infra/3-deploy-apps.sh` as `<name-prefix>-api-<env>` and `<name-prefix>-web-<env>`. Pass the InvestCorp values directly:
+InvestCorp's network team owns NSGs, private endpoints, and the hub-managed `privatelink.*` DNS zones. Setting `investcorpEnv=true` puts the template into "managed-network" mode that aligns with their standard:
+
+| Concern                          | Default (`investcorpEnv=false`)                  | InvestCorp mode (`investcorpEnv=true`)                                    |
+| -------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------- |
+| NSGs (`-nsg-pe`, `-nsg-services`)| Created and attached to subnets                  | **Not created.** Subnets deployed without NSG (Azure Firewall + intra-VNet rules cover policy) |
+| Private DNS zones (12 × `privatelink.*`) | Created in the workload RG and linked to VNet | **Not created.** Customer's hub already hosts these zones                |
+| Private endpoints (PaaS + apps)  | Created in `snet-pe` and joined to local DNS zones | **Not created.** Customer's network team creates PEs and adds the A-records in their hub DNS zones post-deploy |
+| `publicNetworkAccess` on PaaS    | `Disabled` (zero-trust)                          | **Still `Disabled`** — resources stay private until the customer wires their PEs |
+| AMPLS resource                   | Created with PE                                  | Created **without** PE (customer adds PE manually)                        |
+| AI Foundry networking            | AVM creates PEs and DNS zone groups              | AVM `networking` block omitted — customer creates PEs against their DNS zones |
+| VNet + subnets (`snet-services`, `snet-pe`) | Created                              | **Still created** (workload owns the VNet)                                |
+| Bastion / jumpbox / Public IPs   | Never deployed                                   | Never deployed                                                            |
+
+When this flag is on, the customer's network team must complete the following **after** `1-deploy-azure-infra.sh` succeeds and **before** `3-deploy-apps.sh` runs (since the apps need ACR pull over the PE):
+
+1. Create Private Endpoints for: Storage (blob), Cosmos (Sql), ACR (registry), AMPLS (azuremonitor), AI Foundry (account + each model), `snet-pe`.
+2. Add the A-records into the corresponding `privatelink.*` zone in the IVC hub (e.g. `privatelink.azurecr.io` → `<acr-name>.privatelink.azurecr.io`).
+3. Create Private Endpoints for the API and Web Apps **after** `3-deploy-apps.sh` finishes (the App Service resources exist only after Phase 3).
+
+The flag requires `isPrivate=true` (default). Validate the build:
 
 ```bash
-yes | bash infra/3-deploy-apps.sh -g $RG -p invs-aiinv -e prod -t latest
-# → invs-aiinv-api-prod, invs-aiinv-web-prod
+az bicep build-params --file infra/bicep/main.investcorp.example.bicepparam --stdout > /dev/null
+```
+
+### 12.2 App Service (api/web) names
+
+The two Web App names are generated by `infra/3-deploy-apps.sh` as `<name-prefix>-api-<env>` and `<name-prefix>-web-<env>`. Pass the InvestCorp values directly via the new `--api-app-name` / `--web-app-name` flags (or the matching env vars):
+
+```bash
+./infra/3-deploy-apps.sh -g $RG \
+  --api-app-name app-dev-ivc-aifoundry-partnerfirms-01 \
+  --web-app-name app-dev-ivc-aifoundry-partnerfirms-02
 ```
 
 (If a fully CAF-compliant pattern such as `invs-aiinv-prod-bhc-web-001` is required, edit `var appName` in `api-app/infra/bicep/main.bicep` and `web-app/infra/bicep/main.bicep` — these are simple one-liners; a future PR will expose them as parameters too.)
@@ -492,4 +562,370 @@ az group create -n rg-invs-aiinv-prod-bhc-001 -l uaenorth
 - [ ] After go-live, AI Foundry flipped to `publicNetworkAccess=Disabled` (§6.3)
 - [ ] Optional: Bastion Basic deployed in the hub for emergency admin (§5.2 D)
 - [ ] Backup & DR strategy for Cosmos (`Continuous7Days` enabled), Storage (consider GRS for prod), ACR (`georeplications` for prod)
+
+---
+
+## Appendix D. Live end-to-end walkthrough (19 May 2026)
+
+This appendix is a **verbatim playbook** of the validation run performed against the `MCAPS-Hybrid-AI&HPC-Saad` subscription in `swedencentral`. Every command, every prompt, every Azure-side configuration change, and every defect discovered during the run is captured here so the InvestCorp operator can reproduce the deployment with no ambiguity.
+
+It supplements (does **not** replace) §6 "Day-1 deploy". When `investcorpEnv=true` the operator workstation only needs **outbound HTTPS to the Azure control plane** — every command below is `az` / `curl`. No Docker required (we use **ACR Tasks** for the build).
+
+### D.0 Pre-flight (one-time)
+
+```bash
+# 1) Repo at expected revision
+cd /path/to/Agentic-AI-Investment-Analysis-Sample
+git status                         # must be clean
+git rev-parse HEAD                 # record commit SHA for change ticket
+
+# 2) Logged into the right tenant + subscription
+az login                           # interactive; SSO is fine
+az account set --subscription '<subscription-name-or-id>'
+az account show --query '{name:name, id:id, tenantId:tenantId}' -o table
+
+# 3) CLI versions (anything ≥ these works)
+az version
+#   azure-cli      2.60+
+#   bicep          0.30+   (deploy script auto-uses az bicep)
+```
+
+### D.1 Resource group
+
+```bash
+# Variables used throughout
+RG=rg-aiinvest-ivc-test
+LOC=swedencentral
+
+az group exists --name "$RG"                                # -> false
+az group create \
+  --name "$RG" \
+  --location "$LOC" \
+  --tags Project=ai-investment-analysis-sample \
+         Owner=<your-alias> \
+         Mode=investcorpEnv \
+  -o table
+# Location      Name
+# ------------  --------------------
+# swedencentral rg-aiinvest-ivc-test
+```
+
+### D.2 Phase 1 — infrastructure (`investcorpEnv=true`)
+
+The IVC parameter file lives at `infra/bicep/main.investcorp.example.bicepparam`. Copy it to a customer-specific file (e.g. `main.investcorp.bicepparam`) and edit the names — do **not** check secrets in. For the validation we used the example file as-is.
+
+```bash
+# The script auto-confirms one prompt ("Continue with deployment? (y/N)"),
+# so we pipe `yes y` to be non-interactive.
+yes y | ./infra/1-deploy-azure-infra.sh \
+  -g "$RG" \
+  -l "$LOC" \
+  --parameters-file infra/bicep/main.investcorp.example.bicepparam \
+  2>&1 | tee /tmp/ivc-infra-deploy.log
+```
+
+Validated runtime: **~13 minutes**. Expected stdout tail:
+
+```text
+Name                         State      Timestamp                         Mode         ResourceGroup
+---------------------------  ---------  --------------------------------  -----------  --------------------
+ai-invest-sample-1779198411  Succeeded  2026-05-19T13:51:27.728528+00:00  Incremental  rg-aiinvest-ivc-test
+✅ Infrastructure deployed successfully
+Container Registry: regpartnerfirmseus201.azurecr.io
+🎉 Azure infrastructure deployment completed!
+```
+
+> **BCP318 warnings** during `az bicep build` are expected and harmless. They originate from optional modules (`privateDns`, NSGs) that may be `null` in IVC mode. The deployment is unaffected because every consumer guards with `(isPrivate && !investcorpEnv)`.
+
+### D.3 Phase 1 — invariants check (proves IVC mode actually skipped NSG/PE/DNS)
+
+```bash
+# Full resource list (should be exactly 11 entries — no NSG, no PE, no DNS zone)
+az resource list -g "$RG" --query "[].{name:name, type:type}" -o table
+```
+
+Expected:
+
+```text
+Name
+----------------------------------------------
+asp-app-dev-ivc-aifoundry-partnerfirms                       Microsoft.Web/serverFarms
+vnet-dev-aifoundry-eus2-01                                   Microsoft.Network/virtualNetworks
+partnerfirms-dev-mngdid-01                                   Microsoft.ManagedIdentity/userAssignedIdentities
+log-analytics-ws-dev-partnerfirms-eus2-01                    Microsoft.OperationalInsights/workspaces
+regpartnerfirmseus201                                        Microsoft.ContainerRegistry/registries
+cosmosdb-dev-partnerfirms-ne-01                              Microsoft.DocumentDB/databaseAccounts
+strgdevpartnerfirmseus20                                     Microsoft.Storage/storageAccounts
+aiaifoundrypfqxpzh                                           Microsoft.CognitiveServices/accounts
+appinsights-app-dev-ivc-aifoundry-partnerfirms               Microsoft.Insights/components
+aiaifoundrypfqxpzh/aiivcpartnerfirms-project                 Microsoft.CognitiveServices/accounts/projects
+az-monitor-pls-partnerfirms-eus2-01                          Microsoft.Insights/privateLinkScopes
+```
+
+Hard gate — must return **0**:
+
+```bash
+az resource list -g "$RG" --query "[?contains(type,'networkSecurityGroups') \
+  || contains(type,'privateDnsZones') \
+  || contains(type,'privateEndpoints')] | length(@)" -o tsv
+# 0
+```
+
+If non-zero, the IVC flag did not propagate. Inspect `infra/bicep/main.bicep` lines around `privateDns` / `network` modules and re-deploy.
+
+### D.4 Phase 1 → Phase 2 — temporary network exceptions
+
+When the IVC hub PEs are not in place yet (smoke-test scenario), we open the PaaS plane briefly so the operator workstation can push images and the App Service can reach Cosmos / Storage. **These five commands MUST be reverted before handing the env to InvestCorp** (see §D.10).
+
+#### D.4.1 Container Registry
+
+The Bicep configures ACR with `exportPolicy.status=Disabled` to prevent data egress. Azure rejects `publicNetworkAccess=Enabled` while exports are disabled, so we flip exports first:
+
+```bash
+az acr update -n regpartnerfirmseus201 --allow-exports true \
+  -o tsv --query "policies.exportPolicy.status"
+# enabled
+
+az acr update -n regpartnerfirmseus201 --public-network-enabled true \
+  -o tsv --query "publicNetworkAccess"
+# Enabled
+```
+
+Grant **AcrPush** to the human running the build (the AVM module already gives **AcrPull** to the UAMI):
+
+```bash
+SUB=$(az account show --query id -o tsv)
+ME=$(az ad signed-in-user show --query id -o tsv)
+az role assignment create \
+  --assignee-object-id "$ME" \
+  --assignee-principal-type User \
+  --role AcrPush \
+  --scope "/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.ContainerRegistry/registries/regpartnerfirmseus201" \
+  --query principalId -o tsv
+```
+
+#### D.4.2 Cosmos DB
+
+```bash
+az cosmosdb update \
+  -g "$RG" -n cosmosdb-dev-partnerfirms-ne-01 \
+  --public-network-access Enabled \
+  --only-show-errors \
+  -o tsv --query "publicNetworkAccess"
+# Enabled
+```
+
+> `--enable-public-network` is **not** a valid flag on `az cosmosdb update`. Use `--public-network-access Enabled` (case-sensitive). The control-plane operation can take 30-120s; subsequent updates against the same account will fail with `PreconditionFailed` until it completes.
+
+#### D.4.3 Storage account
+
+```bash
+az storage account update \
+  -g "$RG" -n strgdevpartnerfirmseus20 \
+  --public-network-access Enabled \
+  -o tsv --query "publicNetworkAccess"
+# Enabled
+```
+
+> **GOTCHA — discovered during this run.** The Bicep also sets `networkAcls.defaultAction=Deny` when `isPrivate=true`. Even with `publicNetworkAccess=Enabled`, **all** traffic is dropped because the firewall default is Deny and there is no VNet rule for `snet-services`. Symptom: the API container starts, then crashes with `AuthorizationFailure` from `azure.storage.blob`, App Service responds `HTTP 503`.
+>
+> **Permanent fix already applied** (commit on this branch): when `investcorpEnv=true`, `networkAcls.defaultAction` is set to `Allow`. `publicNetworkAccess` remains `Disabled` in the final state, so the customer's PE is still the only reachable path. See `infra/bicep/modules/storage.bicep` and the `investcorpEnv` param plumbed from `main.bicep`.
+>
+> If you are on an older revision of the template, apply the workaround manually:
+>
+> ```bash
+> az storage account update \
+>   -g "$RG" -n strgdevpartnerfirmseus20 \
+>   --default-action Allow \
+>   -o tsv --query "networkRuleSet.defaultAction"
+> # Allow
+> ```
+
+### D.5 Phase 2 — build & push images (ACR Tasks, no local Docker)
+
+`infra/2-build-and-push-images.sh` supports two modes:
+
+| Flag | Where build runs | Requires Docker locally? |
+| --- | --- | --- |
+| `--docker` *(default)* | Operator workstation | Yes — fails fast if Docker daemon not reachable |
+| `--acr` | Azure-side (ACR Tasks) | **No** — ideal for locked-down workstations |
+
+For IVC operators we strongly recommend `--acr`:
+
+```bash
+yes y | ./infra/2-build-and-push-images.sh \
+  -r regpartnerfirmseus201.azurecr.io \
+  --acr \
+  2>&1 | tee /tmp/ivc-images.log
+```
+
+Validated runtime: **~10-15 minutes for both images**. The script makes 3 attempts per image to handle Docker Hub `toomanyrequests` (rate-limit) errors. Expected final lines:
+
+```text
+✅ Successfully built and pushed regpartnerfirmseus201.azurecr.io/ai-invest-api:latest via ACR Tasks
+✅ Successfully built and pushed regpartnerfirmseus201.azurecr.io/ai-invest-web:latest via ACR Tasks
+🎉 Image(s) built and pushed successfully!
+```
+
+### D.6 Phase 3 — application deploy with explicit IVC names
+
+```bash
+yes y | ./infra/3-deploy-apps.sh \
+  -g "$RG" \
+  --api-app-name app-dev-ivc-aifoundry-partnerfirms-01 \
+  --web-app-name app-dev-ivc-aifoundry-partnerfirms-02 \
+  2>&1 | tee /tmp/ivc-apps-deploy.log
+```
+
+Validated runtime: **~10-15 minutes**. Expected final lines:
+
+```text
+✅ API App: https://app-dev-ivc-aifoundry-partnerfirms-01.azurewebsites.net
+   Health Check: https://app-dev-ivc-aifoundry-partnerfirms-01.azurewebsites.net/health
+   API Docs: https://app-dev-ivc-aifoundry-partnerfirms-01.azurewebsites.net/docs
+✅ Web App: https://app-dev-ivc-aifoundry-partnerfirms-02.azurewebsites.net
+```
+
+### D.7 Phase 3.5 — temporarily open App Service public access (smoke-test only)
+
+Both Web Apps inherit `publicNetworkAccess=Disabled` from the private template. To smoke-test from the operator workstation:
+
+```bash
+az webapp update -g "$RG" -n app-dev-ivc-aifoundry-partnerfirms-01 \
+  --set publicNetworkAccess=Enabled --query "name" -o tsv
+az webapp update -g "$RG" -n app-dev-ivc-aifoundry-partnerfirms-02 \
+  --set publicNetworkAccess=Enabled --query "name" -o tsv
+```
+
+### D.8 Phase 3.6 — smoke test
+
+```bash
+curl -sS -o /dev/null -w "%{http_code}\n" --max-time 30 \
+  https://app-dev-ivc-aifoundry-partnerfirms-01.azurewebsites.net/health
+# 200
+
+curl -sS -o /dev/null -w "%{http_code}\n" --max-time 30 \
+  https://app-dev-ivc-aifoundry-partnerfirms-02.azurewebsites.net/
+# 200
+```
+
+If the **API returns 503** for >2 minutes after the deploy:
+
+1. Confirm the image listens on port **8090** — the Dockerfile is `CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8090"]`. App Service Linux needs `WEBSITES_PORT=8090`. The Bicep sets this automatically via `web-app-container.bicep` (`targetPort=8090`).
+2. Pull container logs:
+
+   ```bash
+   az webapp log download -g "$RG" -n app-dev-ivc-aifoundry-partnerfirms-01 \
+     --log-file /tmp/apilogs.zip
+   rm -rf /tmp/apilogs && mkdir /tmp/apilogs
+   unzip -q /tmp/apilogs.zip -d /tmp/apilogs
+   tail -n 80 /tmp/apilogs/LogFiles/*default_docker.log
+   ```
+3. Common errors:
+   - `AuthorizationFailure` on blob → §D.4.3 GOTCHA (storage firewall Deny).
+   - `Forbidden` on Cosmos → §D.4.2 (Cosmos still has `publicNetworkAccess=Disabled`).
+   - `did not start within expected time limit` → wrong `WEBSITES_PORT`.
+
+### D.9 Phase 4 — operational checks
+
+```bash
+# Confirm UAMI role assignments on the data plane
+UAMI_PID=$(az identity show -g "$RG" -n partnerfirms-dev-mngdid-01 --query principalId -o tsv)
+
+STG_ID=$(az storage account show -g "$RG" -n strgdevpartnerfirmseus20 --query id -o tsv)
+az role assignment list --assignee "$UAMI_PID" --scope "$STG_ID" \
+  --query "[].{role:roleDefinitionName}" -o table
+# Storage Blob Data Contributor + Contributor
+
+ACR_ID=$(az acr show -n regpartnerfirmseus201 --query id -o tsv)
+az role assignment list --assignee "$UAMI_PID" --scope "$ACR_ID" \
+  --query "[].{role:roleDefinitionName}" -o table
+# AcrPull
+```
+
+### D.10 Phase 5 — revert all temporary exceptions
+
+**Mandatory before handing the env to the InvestCorp network team.** These commands restore the IVC-compliant posture so their PEs become the only reachable path:
+
+```bash
+# Re-disable public network access on every PaaS we opened
+az acr update -n regpartnerfirmseus201 --public-network-enabled false \
+  -o tsv --query "publicNetworkAccess"
+# Disabled
+
+# (Optional) Re-disable ACR exports if they were originally off
+az acr update -n regpartnerfirmseus201 --allow-exports false \
+  -o tsv --query "policies.exportPolicy.status"
+# disabled
+
+az cosmosdb update -g "$RG" -n cosmosdb-dev-partnerfirms-ne-01 \
+  --public-network-access Disabled \
+  -o tsv --query "publicNetworkAccess"
+# Disabled
+
+az storage account update -g "$RG" -n strgdevpartnerfirmseus20 \
+  --public-network-access Disabled \
+  -o tsv --query "publicNetworkAccess"
+# Disabled
+
+# App Services back to private
+az webapp update -g "$RG" -n app-dev-ivc-aifoundry-partnerfirms-01 \
+  --set publicNetworkAccess=Disabled --query "publicNetworkAccess" -o tsv
+az webapp update -g "$RG" -n app-dev-ivc-aifoundry-partnerfirms-02 \
+  --set publicNetworkAccess=Disabled --query "publicNetworkAccess" -o tsv
+```
+
+Final state sanity check:
+
+```bash
+az resource list -g "$RG" \
+  --query "[?contains(type,'storageAccounts') || contains(type,'databaseAccounts') \
+            || contains(type,'registries') || contains(type,'sites')] \
+           .{name:name, public:properties.publicNetworkAccess}" \
+  -o table
+# All five should report 'Disabled'.
+```
+
+### D.11 Defects & template improvements landed during this validation
+
+| # | Symptom found in run | Root cause | Fix shipped on this branch |
+| - | -------------------- | ---------- | -------------------------- |
+| 1 | API container `HTTP 503`; `AuthorizationFailure` from blob | `networkAcls.defaultAction=Deny` on storage, no VNet rule for `snet-services` in IVC mode | New `investcorpEnv` param on `modules/storage.bicep`; when true, `defaultAction=Allow` (publicNetworkAccess remains `Disabled` so PEs are still the only path) |
+| 2 | `az acr update --public-network-enabled true` returned `BadRequest: exports disabled` | Bicep sets `exportPolicy.status=Disabled` | Documented the `--allow-exports true` prerequisite in §D.4.1 |
+| 3 | First deploy attempt failed: `./infra/1-deploy-azure-infra.sh: No such file or directory` | Operator was in repo *parent* dir | Documented `cd` requirement / absolute path usage at top of §D.0 |
+| 4 | `2-build-and-push-images.sh` fails with `Docker is not running` | Default mode is `--docker` | §D.5 mandates `--acr` for IVC operators |
+
+### D.12 Full validated configuration matrix (post-revert)
+
+| Resource | Name | publicNetworkAccess | Network ACL default | NSG attached | PE present | UAMI roles |
+| --- | --- | --- | --- | --- | --- | --- |
+| App Service Plan | `asp-app-dev-ivc-aifoundry-partnerfirms` | n/a | n/a | n/a | n/a | n/a |
+| VNet | `vnet-dev-aifoundry-eus2-01` | n/a | n/a | **No** | n/a | n/a |
+| UAMI | `partnerfirms-dev-mngdid-01` | n/a | n/a | n/a | n/a | n/a |
+| LAW | `log-analytics-ws-dev-partnerfirms-eus2-01` | Disabled (ingestion via AMPLS) | n/a | n/a | Customer-managed | Reader (UAMI) |
+| ACR | `regpartnerfirmseus201` | Disabled | n/a | n/a | Customer-managed | AcrPull (UAMI) |
+| Cosmos DB | `cosmosdb-dev-partnerfirms-ne-01` | Disabled | n/a | n/a | Customer-managed | Cosmos DB Data Contributor (UAMI) |
+| Storage | `strgdevpartnerfirmseus20` | Disabled | **Allow** (per IVC fix) | n/a | Customer-managed | Storage Blob Data Contributor + Contributor (UAMI) |
+| AI Foundry | `aiaifoundrypfqxpzh` | Disabled (after §6.3) | Deny + `snet-services` VNet rule | n/a | Customer-managed | Azure AI Developer (UAMI) |
+| AI Foundry project | `aiaifoundrypfqxpzh/aiivcpartnerfirms-project` | inherited | inherited | n/a | inherited | inherited |
+| App Insights | `appinsights-app-dev-ivc-aifoundry-partnerfirms` | n/a | n/a | n/a | via AMPLS | n/a |
+| AMPLS | `az-monitor-pls-partnerfirms-eus2-01` | n/a | `Open` for ingestion; `PrivateOnly` for queries | n/a | Customer-managed | n/a |
+| API Web App | `app-dev-ivc-aifoundry-partnerfirms-01` | Disabled | n/a | n/a | Customer-managed | Uses UAMI |
+| Web Web App | `app-dev-ivc-aifoundry-partnerfirms-02` | Disabled | n/a | n/a | Customer-managed | Uses UAMI |
+
+### D.13 Total wall-clock budget (validated)
+
+| Phase | Step | Duration |
+| --- | --- | --- |
+| D.1 | RG create | <10 s |
+| D.2 | Infra deploy (script 1) | ~13 min |
+| D.3 | Invariants check | <5 s |
+| D.4 | Open temp exceptions (3× `az ... update` + 1 role assignment) | ~3 min |
+| D.5 | Image build/push via ACR Tasks (2 images) | ~12 min |
+| D.6 | App deploy (script 3) | ~12 min |
+| D.7 | Open App Service public (smoke-only) | <30 s |
+| D.8 | Smoke test | <10 s |
+| D.10 | Revert all exceptions | ~3 min |
+| **Total** | | **~45 min** |
+
 

@@ -4,6 +4,9 @@ param location string = resourceGroup().location
 @description('Required: Base name used by the AI Foundry AVM pattern (max 12 chars)')
 param aiFoundryBaseName string
 
+@description('Optional: Explicit name for the AI Foundry project. Defaults to "aiinvest-project".')
+param aiFoundryProjectName string = 'aiinvest-project'
+
 @description('Managed Identity that will be given access to the AI Foundry Resource')
 param roleAssignedManagedIdentityPrincipalIds string[]
 
@@ -12,6 +15,9 @@ param tags object = {}
 
 @description('When true, disables public network access and deploys the AI Foundry private endpoints via AVM.')
 param isPrivate bool = false
+
+@description('When true, skips creation of AI Foundry private endpoints (customer-managed PE).')
+param skipPrivateEndpoints bool = false
 
 @description('Agent service subnet id (optional; reserved for future Foundry agent runtime private networking)')
 param agentServiceSubnetId string = ''
@@ -29,12 +35,14 @@ param aiServicesPrivateDnsZoneId string = ''
 // associated resources (Search/Cosmos/KV), and — when `networking` is supplied —
 // the private endpoints + DNS zone groups. Passing the networking block also
 // disables public network access on the underlying account.
-var networkingConfig = isPrivate ? {
-  agentServiceSubnetResourceId: agentServiceSubnetId
-  aiServicesPrivateDnsZoneResourceId: aiServicesPrivateDnsZoneId
-  cognitiveServicesPrivateDnsZoneResourceId: cognitiveServicesPrivateDnsZoneId
-  openAiPrivateDnsZoneResourceId: openAiPrivateDnsZoneId
-} : null
+var networkingConfig = (isPrivate && !skipPrivateEndpoints)
+  ? {
+      agentServiceSubnetResourceId: agentServiceSubnetId
+      aiServicesPrivateDnsZoneResourceId: aiServicesPrivateDnsZoneId
+      cognitiveServicesPrivateDnsZoneResourceId: cognitiveServicesPrivateDnsZoneId
+      openAiPrivateDnsZoneResourceId: openAiPrivateDnsZoneId
+    }
+  : null
 
 module aiFoundry 'br/public:avm/ptn/ai-ml/ai-foundry:0.5.0' = {
   params: {
@@ -50,7 +58,7 @@ module aiFoundry 'br/public:avm/ptn/ai-ml/ai-foundry:0.5.0' = {
       project: {
         desc: 'AI Foundry project for AI Investment Analysis Sample'
         displayName: 'AI-Invest'
-        name: 'aiinvest-project'
+        name: aiFoundryProjectName
       }
       roleAssignments: [
         for principalId in roleAssignedManagedIdentityPrincipalIds: {

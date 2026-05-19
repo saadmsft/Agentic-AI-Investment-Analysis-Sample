@@ -88,7 +88,7 @@ resource acrRef 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' exis
   dependsOn: [ containerRegistry ]
 }
 
-module pe 'private-endpoint.bicep' = if (isPrivate) {
+module pe 'private-endpoint.bicep' = if (isPrivate && !empty(privateEndpointSubnetId)) {
   name: 'acr-pe-${uniqueString(containerRegistryName)}'
   params: {
     name: '${containerRegistryName}-pe'

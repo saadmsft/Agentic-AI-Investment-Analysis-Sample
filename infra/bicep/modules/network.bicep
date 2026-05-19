@@ -23,6 +23,9 @@ param vnetAddressPrefix string
 @description('Tags for resources')
 param tags object = {}
 
+@description('When false, subnets are deployed without NSG attachment (customer-managed governance, e.g. Azure Firewall + intra-VNet rules).')
+param deployNetworkSecurityGroups bool = true
+
 // Two equal /27 subnets derived from the supplied /26.
 //   offset 0  → snet-services (App Service delegation)
 //   offset 1  → snet-pe       (private endpoints)
@@ -31,7 +34,7 @@ var peSubnetPrefix       = cidrSubnet(vnetAddressPrefix, 27, 1)
 
 // ---- NSGs -------------------------------------------------------------------
 
-resource nsgPe 'Microsoft.Network/networkSecurityGroups@2023-11-01' = {
+resource nsgPe 'Microsoft.Network/networkSecurityGroups@2023-11-01' = if (deployNetworkSecurityGroups) {
   name: '${vnetName}-nsg-pe'
   location: location
   tags: tags
@@ -54,7 +57,7 @@ resource nsgPe 'Microsoft.Network/networkSecurityGroups@2023-11-01' = {
   }
 }
 
-resource nsgServices 'Microsoft.Network/networkSecurityGroups@2023-11-01' = {
+resource nsgServices 'Microsoft.Network/networkSecurityGroups@2023-11-01' = if (deployNetworkSecurityGroups) {
   name: '${vnetName}-nsg-services'
   location: location
   tags: tags
@@ -78,7 +81,7 @@ resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = {
         name: 'snet-services'
         properties: {
           addressPrefix: servicesSubnetPrefix
-          networkSecurityGroup: { id: nsgServices.id }
+          networkSecurityGroup: deployNetworkSecurityGroups ? { id: nsgServices.id } : null
           delegations: [
             {
               name: 'appsvc-delegation'
@@ -94,7 +97,7 @@ resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = {
         name: 'snet-pe'
         properties: {
           addressPrefix: peSubnetPrefix
-          networkSecurityGroup: { id: nsgPe.id }
+          networkSecurityGroup: deployNetworkSecurityGroups ? { id: nsgPe.id } : null
           privateEndpointNetworkPolicies: 'Disabled'
         }
       }

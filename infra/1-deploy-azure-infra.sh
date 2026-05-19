@@ -21,6 +21,7 @@ ENVIRONMENT="dev"
 DEBUG="false"
 IS_PRIVATE="true"
 VNET_ADDRESS_PREFIX=""
+PARAMETERS_FILE=""
 
 # Function to show usage
 usage() {
@@ -35,6 +36,11 @@ usage() {
     echo "  -p, --name-prefix          Resource name prefix (default: aiinvest)"
     echo "  -e, --environment          Environment name (default: dev)"
     echo "  -a, --ai-foundry-location  AI Foundry location (default: swedencentral)"
+    echo "      --parameters-file      Path to a .bicepparam file with custom naming"
+    echo "                             (e.g. infra/bicep/main.investcorp.example.bicepparam)."
+    echo "                             When supplied, the file's values take precedence;"
+    echo "                             CLI flags below are still passed and override values"
+    echo "                             not set in the file."
     echo "  --public                   Deploy the legacy public topology (isPrivate=false)"
     echo "  -d, --debug                Enable debug logging"
     echo "  -h, --help                 Show this help message"
@@ -79,6 +85,10 @@ while [[ $# -gt 0 ]]; do
             VNET_ADDRESS_PREFIX="$2"
             shift 2
             ;;
+        --parameters-file)
+            PARAMETERS_FILE="$2"
+            shift 2
+            ;;
         -d|--debug)
             DEBUG="true"
             shift
@@ -99,12 +109,12 @@ if [ -z "$RESOURCE_GROUP" ]; then
     usage
 fi
 
-if [ -z "$VNET_ADDRESS_PREFIX" ]; then
-    echo -e "${RED}❌ Error: --vnet-address-prefix is required (must be a /26, e.g. 10.123.45.0/26)${NC}"
+if [ -z "$VNET_ADDRESS_PREFIX" ] && [ -z "$PARAMETERS_FILE" ]; then
+    echo -e "${RED}❌ Error: --vnet-address-prefix is required (must be a /26, e.g. 10.123.45.0/26) unless --parameters-file is supplied${NC}"
     usage
 fi
 
-if [[ "$VNET_ADDRESS_PREFIX" != */26 ]]; then
+if [ -n "$VNET_ADDRESS_PREFIX" ] && [[ "$VNET_ADDRESS_PREFIX" != */26 ]]; then
     echo -e "${RED}❌ Error: --vnet-address-prefix must end in /26 (got: $VNET_ADDRESS_PREFIX)${NC}"
     exit 1
 fi
@@ -170,18 +180,38 @@ if [ "$DEBUG" == "true" ]; then
   optional_args+=("--debug")
 fi
 
-az deployment group create \
-    --resource-group "$RESOURCE_GROUP" \
-    --template-file "infra/bicep/main.bicep" \
-    --parameters \
-        namePrefix="$NAME_PREFIX" \
-        environment="$ENVIRONMENT" \
-        location="$LOCATION" \
-        aiFoundryLocation="$AIFOUNDRY_LOCATION" \
-        isPrivate="$IS_PRIVATE" \
-        vnetAddressPrefix="$VNET_ADDRESS_PREFIX" \
-    --name "$DEPLOYMENT_NAME" \
-    --output table ${optional_args[@]}
+if [ -n "$PARAMETERS_FILE" ]; then
+    if [ ! -f "$PARAMETERS_FILE" ]; then
+        echo -e "${RED}❌ Parameters file not found: $PARAMETERS_FILE${NC}"
+        exit 1
+    fi
+    echo -e "${BLUE}📄 Using parameters file: $PARAMETERS_FILE${NC}"
+    # Pass location / aiFoundryLocation as inline overrides only if the
+    # bicepparam file does not define them. Other values (namePrefix,
+    # environment, isPrivate, vnetAddressPrefix, name overrides) come from
+    # the file.
+    az deployment group create \
+        --resource-group "$RESOURCE_GROUP" \
+        --template-file "infra/bicep/main.bicep" \
+        --parameters "$PARAMETERS_FILE" \
+            location="$LOCATION" \
+            aiFoundryLocation="$AIFOUNDRY_LOCATION" \
+        --name "$DEPLOYMENT_NAME" \
+        --output table ${optional_args[@]}
+else
+    az deployment group create \
+        --resource-group "$RESOURCE_GROUP" \
+        --template-file "infra/bicep/main.bicep" \
+        --parameters \
+            namePrefix="$NAME_PREFIX" \
+            environment="$ENVIRONMENT" \
+            location="$LOCATION" \
+            aiFoundryLocation="$AIFOUNDRY_LOCATION" \
+            isPrivate="$IS_PRIVATE" \
+            vnetAddressPrefix="$VNET_ADDRESS_PREFIX" \
+        --name "$DEPLOYMENT_NAME" \
+        --output table ${optional_args[@]}
+fi
 
 
 if [ $? -eq 0 ]; then

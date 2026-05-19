@@ -176,7 +176,7 @@ get_deployment_outputs() {
     # Get the deployment name
     local deployment_name=$(az deployment group list \
         --resource-group "$resource_group" \
-        --query "[?contains(name, 'ai-invest-sample')].name | [0]" \
+        --query "[?contains(name, 'ai-invest-appsvc')].name | [0]" \
         --output tsv)
 
     if [ -z "$deployment_name" ]; then

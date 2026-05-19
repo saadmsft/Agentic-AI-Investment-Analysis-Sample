@@ -13,14 +13,14 @@ param logAnalyticsResourceId string
 @description('Application Insights component resource id to scope')
 param appInsightsResourceId string
 
-@description('Subnet resource id where the PE NIC is placed')
-param privateEndpointSubnetId string
+@description('Subnet resource id where the PE NIC is placed. Leave empty to skip PE creation (customer-managed PE).')
+param privateEndpointSubnetId string = ''
 
 @description('Resource group location for the private endpoint resource')
 param privateEndpointLocation string = resourceGroup().location
 
-@description('Private DNS zone resource ids for Azure Monitor PLS (monitor, oms, ods, agentsvc, blob)')
-param privateDnsZoneIds string[]
+@description('Private DNS zone resource ids for Azure Monitor PLS (monitor, oms, ods, agentsvc, blob). Leave empty when skipping PE.')
+param privateDnsZoneIds string[] = []
 
 @description('Tags for resources')
 param tags object = {}
@@ -53,7 +53,7 @@ resource appiScope 'Microsoft.Insights/privateLinkScopes/scopedResources@2021-07
   }
 }
 
-module ampPe 'private-endpoint.bicep' = {
+module ampPe 'private-endpoint.bicep' = if (!empty(privateEndpointSubnetId)) {
   name: 'ampls-pe-${uniqueString(ampls.id)}'
   params: {
     name: '${name}-pe'

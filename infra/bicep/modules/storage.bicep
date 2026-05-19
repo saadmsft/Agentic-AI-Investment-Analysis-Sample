@@ -16,6 +16,9 @@ param tags object = {}
 @description('When true, disables public network access and deploys a private endpoint for blob.')
 param isPrivate bool = false
 
+@description('When true (customer-managed networking), keep publicNetworkAccess=Disabled but set network ACL defaultAction=Allow so the customer\'s out-of-band private endpoint (or trusted services) can reach blob without an in-template VNet rule. Has no effect when isPrivate=false.')
+param investcorpEnv bool = false
+
 @description('Subnet resource id for the private endpoint (required when isPrivate=true)')
 param privateEndpointSubnetId string = ''
 
@@ -63,7 +66,7 @@ module storageAccount 'br/public:avm/res/storage/storage-account:0.27.1' = {
     enableHierarchicalNamespace: false
     publicNetworkAccess: isPrivate ? 'Disabled' : 'Enabled'
     networkAcls: {
-      defaultAction: isPrivate ? 'Deny' : 'Allow'
+      defaultAction: (isPrivate && !investcorpEnv) ? 'Deny' : 'Allow'
       bypass: 'AzureServices'
     }
     blobServices: {
@@ -95,7 +98,7 @@ resource storageAccountRef 'Microsoft.Storage/storageAccounts@2023-05-01' existi
   dependsOn: [ storageAccount ]
 }
 
-module pe 'private-endpoint.bicep' = if (isPrivate) {
+module pe 'private-endpoint.bicep' = if (isPrivate && !empty(privateEndpointSubnetId)) {
   name: 'storage-pe-${uniqueString(storageAccountName)}'
   params: {
     name: '${storageAccountName}-pe-blob'

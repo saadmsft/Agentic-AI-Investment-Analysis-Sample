@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.42.1.51946",
-      "templateHash": "2508985449853863683"
+      "templateHash": "13938598006548735930"
     }
   },
   "parameters": {
@@ -42,6 +42,13 @@
       "type": "string",
       "metadata": {
         "description": "Address space for the workload VNet. Customer supplies a /26 (e.g. 10.123.45.0/26). Required for both private and public deployments (a placeholder is acceptable when isPrivate=false)."
+      }
+    },
+    "investcorpEnv": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "When true, deploys for the InvestCorp/IVC managed environment: keeps publicNetworkAccess=Disabled on all PaaS, but skips NSG creation, private DNS zones, and ALL private endpoints. The customer's network team creates NSGs, PEs, and DNS zone records out-of-band against their pre-existing hub-managed private DNS zones. Requires isPrivate=true."
       }
     },
     "cosmosDbName": {
@@ -163,6 +170,13 @@
       "metadata": {
         "description": "Optional. Explicit base name (max 12 chars, lowercase) used to derive AI Foundry resource names. Default: derived from <namePrefix>-<environment>-<rg.id>"
       }
+    },
+    "aiFoundryProjectNameOverride": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Explicit AI Foundry project name. Default: aiinvest-project"
+      }
     }
   },
   "variables": {
@@ -207,6 +221,9 @@
           },
           "tags": {
             "value": "[variables('tags')]"
+          },
+          "deployNetworkSecurityGroups": {
+            "value": "[not(parameters('investcorpEnv'))]"
           }
         },
         "template": {
@@ -216,7 +233,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.42.1.51946",
-              "templateHash": "15751875796585908564"
+              "templateHash": "2303671903678756842"
             }
           },
           "parameters": {
@@ -245,6 +262,13 @@
               "metadata": {
                 "description": "Tags for resources"
               }
+            },
+            "deployNetworkSecurityGroups": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "When false, subnets are deployed without NSG attachment (customer-managed governance, e.g. Azure Firewall + intra-VNet rules)."
+              }
             }
           },
           "variables": {
@@ -253,6 +277,7 @@
           },
           "resources": [
             {
+              "condition": "[parameters('deployNetworkSecurityGroups')]",
               "type": "Microsoft.Network/networkSecurityGroups",
               "apiVersion": "2023-11-01",
               "name": "[format('{0}-nsg-pe', parameters('vnetName'))]",
@@ -277,6 +302,7 @@
               }
             },
             {
+              "condition": "[parameters('deployNetworkSecurityGroups')]",
               "type": "Microsoft.Network/networkSecurityGroups",
               "apiVersion": "2023-11-01",
               "name": "[format('{0}-nsg-services', parameters('vnetName'))]",
@@ -303,9 +329,7 @@
                     "name": "snet-services",
                     "properties": {
                       "addressPrefix": "[variables('servicesSubnetPrefix')]",
-                      "networkSecurityGroup": {
-                        "id": "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg-services', parameters('vnetName')))]"
-                      },
+                      "networkSecurityGroup": "[if(parameters('deployNetworkSecurityGroups'), createObject('id', resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg-services', parameters('vnetName')))), null())]",
                       "delegations": [
                         {
                           "name": "appsvc-delegation",
@@ -325,9 +349,7 @@
                     "name": "snet-pe",
                     "properties": {
                       "addressPrefix": "[variables('peSubnetPrefix')]",
-                      "networkSecurityGroup": {
-                        "id": "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg-pe', parameters('vnetName')))]"
-                      },
+                      "networkSecurityGroup": "[if(parameters('deployNetworkSecurityGroups'), createObject('id', resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg-pe', parameters('vnetName')))), null())]",
                       "privateEndpointNetworkPolicies": "Disabled"
                     }
                   }
@@ -361,7 +383,7 @@
       }
     },
     "privateDns": {
-      "condition": "[parameters('isPrivate')]",
+      "condition": "[and(parameters('isPrivate'), not(parameters('investcorpEnv')))]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
       "name": "[format('privateDnsDeployment.{0}', variables('shortHash'))]",
@@ -5119,21 +5141,11 @@
           "appInsightsResourceId": {
             "value": "[reference('appInsights').outputs.resourceId.value]"
           },
-          "privateEndpointSubnetId": {
-            "value": "[reference('network').outputs.peSubnetId.value]"
-          },
+          "privateEndpointSubnetId": "[if(parameters('investcorpEnv'), createObject('value', ''), createObject('value', reference('network').outputs.peSubnetId.value))]",
           "privateEndpointLocation": {
             "value": "[parameters('location')]"
           },
-          "privateDnsZoneIds": {
-            "value": [
-              "[reference('privateDns').outputs.monitorZoneId.value]",
-              "[reference('privateDns').outputs.omsZoneId.value]",
-              "[reference('privateDns').outputs.odsZoneId.value]",
-              "[reference('privateDns').outputs.agentsvcZoneId.value]",
-              "[reference('privateDns').outputs.blobFixedZoneId.value]"
-            ]
-          },
+          "privateDnsZoneIds": "[if(parameters('investcorpEnv'), createObject('value', createArray()), createObject('value', createArray(reference('privateDns').outputs.monitorZoneId.value, reference('privateDns').outputs.omsZoneId.value, reference('privateDns').outputs.odsZoneId.value, reference('privateDns').outputs.agentsvcZoneId.value, reference('privateDns').outputs.blobFixedZoneId.value)))]",
           "tags": {
             "value": "[variables('tags')]"
           }
@@ -5146,7 +5158,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.42.1.51946",
-              "templateHash": "3981484094208687748"
+              "templateHash": "13228763489627553513"
             }
           },
           "parameters": {
@@ -5177,8 +5189,9 @@
             },
             "privateEndpointSubnetId": {
               "type": "string",
+              "defaultValue": "",
               "metadata": {
-                "description": "Subnet resource id where the PE NIC is placed"
+                "description": "Subnet resource id where the PE NIC is placed. Leave empty to skip PE creation (customer-managed PE)."
               }
             },
             "privateEndpointLocation": {
@@ -5193,8 +5206,9 @@
               "items": {
                 "type": "string"
               },
+              "defaultValue": [],
               "metadata": {
-                "description": "Private DNS zone resource ids for Azure Monitor PLS (monitor, oms, ods, agentsvc, blob)"
+                "description": "Private DNS zone resource ids for Azure Monitor PLS (monitor, oms, ods, agentsvc, blob). Leave empty when skipping PE."
               }
             },
             "tags": {
@@ -5242,6 +5256,7 @@
               ]
             },
             "ampPe": {
+              "condition": "[not(empty(parameters('privateEndpointSubnetId')))]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "[format('ampls-pe-{0}', uniqueString(resourceId('microsoft.insights/privateLinkScopes', parameters('name'))))]",
@@ -5453,8 +5468,11 @@
           "isPrivate": {
             "value": "[parameters('isPrivate')]"
           },
-          "privateEndpointSubnetId": "[if(parameters('isPrivate'), createObject('value', reference('network').outputs.peSubnetId.value), createObject('value', ''))]",
-          "blobPrivateDnsZoneId": "[if(parameters('isPrivate'), createObject('value', reference('privateDns').outputs.blobZoneStorageSuffixId.value), createObject('value', ''))]"
+          "investcorpEnv": {
+            "value": "[parameters('investcorpEnv')]"
+          },
+          "privateEndpointSubnetId": "[if(and(parameters('isPrivate'), not(parameters('investcorpEnv'))), createObject('value', reference('network').outputs.peSubnetId.value), createObject('value', ''))]",
+          "blobPrivateDnsZoneId": "[if(and(parameters('isPrivate'), not(parameters('investcorpEnv'))), createObject('value', reference('privateDns').outputs.blobZoneStorageSuffixId.value), createObject('value', ''))]"
         },
         "template": {
           "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
@@ -5464,7 +5482,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.42.1.51946",
-              "templateHash": "8066018424758563884"
+              "templateHash": "10168570770554071447"
             }
           },
           "parameters": {
@@ -5509,6 +5527,13 @@
               "defaultValue": false,
               "metadata": {
                 "description": "When true, disables public network access and deploys a private endpoint for blob."
+              }
+            },
+            "investcorpEnv": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "When true (customer-managed networking), keep publicNetworkAccess=Disabled but set network ACL defaultAction=Allow so the customer's out-of-band private endpoint (or trusted services) can reach blob without an in-template VNet rule. Has no effect when isPrivate=false."
               }
             },
             "privateEndpointSubnetId": {
@@ -5604,7 +5629,7 @@
                   "publicNetworkAccess": "[if(parameters('isPrivate'), createObject('value', 'Disabled'), createObject('value', 'Enabled'))]",
                   "networkAcls": {
                     "value": {
-                      "defaultAction": "[if(parameters('isPrivate'), 'Deny', 'Allow')]",
+                      "defaultAction": "[if(and(parameters('isPrivate'), not(parameters('investcorpEnv'))), 'Deny', 'Allow')]",
                       "bypass": "AzureServices"
                     }
                   },
@@ -12171,7 +12196,7 @@
               }
             },
             "pe": {
-              "condition": "[parameters('isPrivate')]",
+              "condition": "[and(parameters('isPrivate'), not(empty(parameters('privateEndpointSubnetId'))))]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "[format('storage-pe-{0}', uniqueString(parameters('storageAccountName')))]",
@@ -12387,8 +12412,8 @@
           "isPrivate": {
             "value": "[parameters('isPrivate')]"
           },
-          "privateEndpointSubnetId": "[if(parameters('isPrivate'), createObject('value', reference('network').outputs.peSubnetId.value), createObject('value', ''))]",
-          "cosmosSqlPrivateDnsZoneId": "[if(parameters('isPrivate'), createObject('value', reference('privateDns').outputs.cosmosSqlZoneId.value), createObject('value', ''))]"
+          "privateEndpointSubnetId": "[if(and(parameters('isPrivate'), not(parameters('investcorpEnv'))), createObject('value', reference('network').outputs.peSubnetId.value), createObject('value', ''))]",
+          "cosmosSqlPrivateDnsZoneId": "[if(and(parameters('isPrivate'), not(parameters('investcorpEnv'))), createObject('value', reference('privateDns').outputs.cosmosSqlZoneId.value), createObject('value', ''))]"
         },
         "template": {
           "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
@@ -12398,7 +12423,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.42.1.51946",
-              "templateHash": "9379637736520502099"
+              "templateHash": "5957614464442282655"
             }
           },
           "parameters": {
@@ -16434,7 +16459,7 @@
               }
             },
             "pe": {
-              "condition": "[parameters('isPrivate')]",
+              "condition": "[and(parameters('isPrivate'), not(empty(parameters('privateEndpointSubnetId'))))]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "[format('cosmos-pe-{0}', uniqueString(parameters('cosmosAccountName')))]",
@@ -16642,8 +16667,8 @@
           "isPrivate": {
             "value": "[parameters('isPrivate')]"
           },
-          "privateEndpointSubnetId": "[if(parameters('isPrivate'), createObject('value', reference('network').outputs.peSubnetId.value), createObject('value', ''))]",
-          "acrPrivateDnsZoneId": "[if(parameters('isPrivate'), createObject('value', reference('privateDns').outputs.acrZoneId.value), createObject('value', ''))]"
+          "privateEndpointSubnetId": "[if(and(parameters('isPrivate'), not(parameters('investcorpEnv'))), createObject('value', reference('network').outputs.peSubnetId.value), createObject('value', ''))]",
+          "acrPrivateDnsZoneId": "[if(and(parameters('isPrivate'), not(parameters('investcorpEnv'))), createObject('value', reference('privateDns').outputs.acrZoneId.value), createObject('value', ''))]"
         },
         "template": {
           "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
@@ -16653,7 +16678,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.42.1.51946",
-              "templateHash": "3096403326932700663"
+              "templateHash": "11788997638237244016"
             }
           },
           "parameters": {
@@ -19957,7 +19982,7 @@
               }
             },
             "pe": {
-              "condition": "[parameters('isPrivate')]",
+              "condition": "[and(parameters('isPrivate'), not(empty(parameters('privateEndpointSubnetId'))))]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "[format('acr-pe-{0}', uniqueString(parameters('containerRegistryName')))]",
@@ -20277,6 +20302,7 @@
           "aiFoundryBaseName": {
             "value": "[variables('resolvedAiFoundryBaseName')]"
           },
+          "aiFoundryProjectName": "[if(empty(parameters('aiFoundryProjectNameOverride')), createObject('value', 'aiinvest-project'), createObject('value', parameters('aiFoundryProjectNameOverride')))]",
           "roleAssignedManagedIdentityPrincipalIds": {
             "value": [
               "[reference('userAssignedIdentity').outputs.principalId.value]"
@@ -20291,9 +20317,12 @@
           "isPrivate": {
             "value": "[parameters('isPrivate')]"
           },
-          "openAiPrivateDnsZoneId": "[if(parameters('isPrivate'), createObject('value', reference('privateDns').outputs.openAiZoneId.value), createObject('value', ''))]",
-          "cognitiveServicesPrivateDnsZoneId": "[if(parameters('isPrivate'), createObject('value', reference('privateDns').outputs.cognitiveServicesZoneId.value), createObject('value', ''))]",
-          "aiServicesPrivateDnsZoneId": "[if(parameters('isPrivate'), createObject('value', reference('privateDns').outputs.aiServicesZoneId.value), createObject('value', ''))]"
+          "skipPrivateEndpoints": {
+            "value": "[parameters('investcorpEnv')]"
+          },
+          "openAiPrivateDnsZoneId": "[if(and(parameters('isPrivate'), not(parameters('investcorpEnv'))), createObject('value', reference('privateDns').outputs.openAiZoneId.value), createObject('value', ''))]",
+          "cognitiveServicesPrivateDnsZoneId": "[if(and(parameters('isPrivate'), not(parameters('investcorpEnv'))), createObject('value', reference('privateDns').outputs.cognitiveServicesZoneId.value), createObject('value', ''))]",
+          "aiServicesPrivateDnsZoneId": "[if(and(parameters('isPrivate'), not(parameters('investcorpEnv'))), createObject('value', reference('privateDns').outputs.aiServicesZoneId.value), createObject('value', ''))]"
         },
         "template": {
           "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
@@ -20303,7 +20332,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.42.1.51946",
-              "templateHash": "18356341267398099831"
+              "templateHash": "13996574454013859763"
             }
           },
           "parameters": {
@@ -20318,6 +20347,13 @@
               "type": "string",
               "metadata": {
                 "description": "Required: Base name used by the AI Foundry AVM pattern (max 12 chars)"
+              }
+            },
+            "aiFoundryProjectName": {
+              "type": "string",
+              "defaultValue": "aiinvest-project",
+              "metadata": {
+                "description": "Optional: Explicit name for the AI Foundry project. Defaults to \"aiinvest-project\"."
               }
             },
             "roleAssignedManagedIdentityPrincipalIds": {
@@ -20341,6 +20377,13 @@
               "defaultValue": false,
               "metadata": {
                 "description": "When true, disables public network access and deploys the AI Foundry private endpoints via AVM."
+              }
+            },
+            "skipPrivateEndpoints": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "When true, skips creation of AI Foundry private endpoints (customer-managed PE)."
               }
             },
             "agentServiceSubnetId": {
@@ -20373,7 +20416,7 @@
             }
           },
           "variables": {
-            "networkingConfig": "[if(parameters('isPrivate'), createObject('agentServiceSubnetResourceId', parameters('agentServiceSubnetId'), 'aiServicesPrivateDnsZoneResourceId', parameters('aiServicesPrivateDnsZoneId'), 'cognitiveServicesPrivateDnsZoneResourceId', parameters('cognitiveServicesPrivateDnsZoneId'), 'openAiPrivateDnsZoneResourceId', parameters('openAiPrivateDnsZoneId')), null())]"
+            "networkingConfig": "[if(and(parameters('isPrivate'), not(parameters('skipPrivateEndpoints'))), createObject('agentServiceSubnetResourceId', parameters('agentServiceSubnetId'), 'aiServicesPrivateDnsZoneResourceId', parameters('aiServicesPrivateDnsZoneId'), 'cognitiveServicesPrivateDnsZoneResourceId', parameters('cognitiveServicesPrivateDnsZoneId'), 'openAiPrivateDnsZoneResourceId', parameters('openAiPrivateDnsZoneId')), null())]"
           },
           "resources": {
             "aiFoundry": {
@@ -20416,7 +20459,7 @@
                       "project": {
                         "desc": "AI Foundry project for AI Investment Analysis Sample",
                         "displayName": "AI-Invest",
-                        "name": "aiinvest-project"
+                        "name": "[parameters('aiFoundryProjectName')]"
                       },
                       "sku": "S0"
                     }
@@ -42817,7 +42860,11 @@
     },
     "appServicePrivateDnsZoneId": {
       "type": "string",
-      "value": "[if(parameters('isPrivate'), reference('privateDns').outputs.appServiceZoneId.value, '')]"
+      "value": "[if(and(parameters('isPrivate'), not(parameters('investcorpEnv'))), reference('privateDns').outputs.appServiceZoneId.value, '')]"
+    },
+    "investcorpEnv": {
+      "type": "bool",
+      "value": "[parameters('investcorpEnv')]"
     },
     "storageAccountName": {
       "type": "string",

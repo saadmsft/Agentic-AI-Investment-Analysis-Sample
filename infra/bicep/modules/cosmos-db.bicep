@@ -80,7 +80,7 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' existi
   dependsOn: [ cosmosDb ]
 }
 
-module pe 'private-endpoint.bicep' = if (isPrivate) {
+module pe 'private-endpoint.bicep' = if (isPrivate && !empty(privateEndpointSubnetId)) {
   name: 'cosmos-pe-${uniqueString(cosmosAccountName)}'
   params: {
     name: '${cosmosAccountName}-pe'

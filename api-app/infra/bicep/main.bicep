@@ -38,8 +38,8 @@ param vnetIntegrationSubnetId string
 @description('Subnet ID for the private endpoint (snet-pe).')
 param privateEndpointSubnetId string
 
-@description('Private DNS zone ID for privatelink.azurewebsites.net')
-param appServicePrivateDnsZoneId string
+@description('Private DNS zone ID for privatelink.azurewebsites.net. Leave empty to skip the PE DNS zone group (customer-managed DNS).')
+param appServicePrivateDnsZoneId string = ''
 
 @description('Additional environment variables')
 param additionalEnvironmentVariables array = []
@@ -47,7 +47,10 @@ param additionalEnvironmentVariables array = []
 @description('Tags for resources')
 param tags object = {}
 
-var appName = '${namePrefix}-api-${environment}'
+@description('Optional. Explicit App Service name override. Default: <namePrefix>-api-<environment>')
+param appNameOverride string = ''
+
+var appName = empty(appNameOverride) ? '${namePrefix}-api-${environment}' : appNameOverride
 
 resource userAssignedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' existing = {
   scope: resourceGroup()

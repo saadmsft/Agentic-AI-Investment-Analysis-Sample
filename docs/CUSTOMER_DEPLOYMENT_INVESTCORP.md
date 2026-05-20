@@ -10,7 +10,7 @@ This document is the single source of truth for deploying the solution into an I
 It is the companion to:
 - [PRIVATE_DEPLOYMENT.md](./PRIVATE_DEPLOYMENT.md) — engineering-grade reference
 - [`infra/bicep/main.bicep`](../infra/bicep/main.bicep) — the template that does the work
-- [`_assets/zero-trust-architecture.png`](../_assets/zero-trust-architecture.png) — logical view
+- [`_assets/zero-trust-architecture-ivc.png`](../_assets/zero-trust-architecture-ivc.png) — logical view for IVC managed-network mode (`investcorpEnv=true`)
 
 ---
 
@@ -25,15 +25,19 @@ It is the companion to:
 | Egress from apps           | Routed through the VNet (`WEBSITE_VNET_ROUTE_ALL=1`) to Private Endpoints + service endpoint for AI Foundry                                              |
 | Identity                   | One User-Assigned Managed Identity (UAMI) federated to both apps. No keys, no shared secrets                                                             |
 | Validated end-to-end       | Yes — IVC mode (`investcorpEnv=true`) deployed in `swedencentral`, both apps return `HTTP 200` after the documented temp public-access exceptions; see Appendix D for the full playbook                |
-| Estimated monthly Azure $$ | ≈ **US $620 – 780 / month** at idle in Sweden Central (see §3.3). Excludes Foundry token consumption.                                                    |
+| Estimated monthly Azure $$ | ≈ **US $170 – 200 / month** at idle in Sweden Central for the workload RG as actually deployed in `rg-aiinvest-ivc-test` (see §3.3). Excludes Foundry token consumption and the customer hub costs (their PEs, DNS, ExpressRoute). |
 
 ---
 
 ## 2. Logical architecture
 
-![Zero-trust architecture](../_assets/zero-trust-architecture.png)
+![InvestCorp managed-network architecture (investcorpEnv=true)](../_assets/zero-trust-architecture-ivc.png)
 
-Diagram source: [`_assets/zero-trust-architecture.mmd`](../_assets/zero-trust-architecture.mmd) (Mermaid) and [`docs/diagrams/private_architecture.py`](./diagrams/private_architecture.py) (mingrammer/diagrams Python).
+**Read this diagram from the bottom up.** The dashed yellow box at the bottom is the **InvestCorp hub** (customer-managed, out of scope for this template) — it owns every Private Endpoint, every Private DNS Zone, and the customer Log Analytics / App Insights workspace. The solid yellow box at the top is the **workload Resource Group** this template deploys (`investcorpEnv=true`): it contains the App Services, ACR, Cosmos, Storage, and AI Foundry — all with `publicNetworkAccess=Disabled` — plus the customer-supplied VNet with `snet-services` (delegated to App Service) and an empty `snet-pe` reserved for the customer to drop their PEs into. There are **no NSGs, no Private Endpoints, no Private DNS Zones, and no AMPLS inside the workload RG** (see the invariants callout, bottom-left). Operator traffic flows: peered corporate network → customer PE in hub → PaaS resource. App egress flows: App Service → VNet integration on `snet-services` → customer PE in hub → PaaS resource. Public internet is blocked on every PaaS endpoint.
+
+> *Storage note:* `networkAcls.defaultAction=Allow` in IVC mode (controlled by `investcorpEnv=true` in `storage.bicep`) is intentional and safe — `publicNetworkAccess=Disabled` is what actually blocks the public path; the Allow on the firewall keeps the customer's PE-based reach path open without requiring a VNet rule on our subnets. See §D.4.3 for the rationale and the bug this fixed.
+
+Diagram source: [`_assets/zero-trust-architecture-ivc.mmd`](../_assets/zero-trust-architecture-ivc.mmd) (IVC managed-network mode, Mermaid). The generic (non-IVC) variant lives at [`_assets/zero-trust-architecture.mmd`](../_assets/zero-trust-architecture.mmd) / [`docs/diagrams/private_architecture.py`](./diagrams/private_architecture.py) and is **not** representative of what this template deploys when `investcorpEnv=true`.
 
 ---
 
@@ -86,23 +90,28 @@ All linked to the workload VNet. **Customer must also link these to whichever VN
 
 ### 3.3 Cost estimate (idle, US $, May 2026 list prices)
 
-Use [Azure pricing calculator](https://azure.microsoft.com/en-us/pricing/calculator/) for an InvestCorp-specific quote. Indicative monthly cost in Sweden Central at idle:
+Use [Azure pricing calculator](https://azure.microsoft.com/en-us/pricing/calculator/) for an InvestCorp-specific quote. The table below reflects the **as-deployed** resources in `rg-aiinvest-ivc-test` / `swedencentral` (SKUs verified against the live RG on 20 May 2026: ASP `P0v3` Linux × 1, ACR `Premium`, Cosmos NoSQL `Standard` (provisioned, Continuous backup), Storage `Standard_LRS` `StorageV2` Hot, Foundry `S0` with `gpt-4.1-mini` `GlobalStandard` capacity 100, Log Analytics + App Insights workspace-based, 2 Private Endpoints on the App Services). Prices pulled from the Azure Retail Prices API for `swedencentral`.
 
-| Item                                       | Approx US $/month |
-| ------------------------------------------ | ----------------- |
-| App Service Plan `P0v3` Linux              | ~ 88              |
-| Azure Container Registry **Premium**       | ~ 167             |
-| Cosmos DB NoSQL (1000 RU/s, 7-day PITR)    | ~ 80              |
-| Storage account (LRS, low traffic)         | ~ 5               |
-| AI Foundry / OpenAI (gpt-4.1-mini, idle)   | ~ 0 (pay per use) |
-| Log Analytics + App Insights (PerGB)       | ~ 30 (small)      |
-| 6 × Private Endpoints                      | ~ 50              |
-| Private DNS zones                          | < 5               |
-| **Optional**: Bastion Basic + Public IP    | ~ 138             |
-| **Subtotal idle (no Bastion)**             | **≈ 425**         |
-| **Subtotal idle (with Bastion)**           | **≈ 563**         |
+| Item                                                          | Unit price (Sweden Central)                       | Approx US $/month |
+| ------------------------------------------------------------- | ------------------------------------------------- | ----------------- |
+| App Service Plan `P0v3` Linux × 1 instance                    | $0.089 / hr                                       | ~ 65              |
+| Azure Container Registry **Premium**                          | $1.667 / day                                      | ~ 51              |
+| Cosmos DB NoSQL (provisioned, ~400 RU/s, Continuous 7-day)    | $0.008 / 100 RU/s / hr + $0.25 /GB-mo + free PITR | ~ 25              |
+| Storage account (`Standard_LRS` Hot, low data + few txns)     | $0.0196 /GB-mo + tiny txn cost                    | ~ 2               |
+| AI Foundry account `S0` (no fixed fee — pay per token)        | $0 idle                                           | 0                 |
+| Log Analytics + App Insights workspace-based (~3–5 GB ingest) | $2.99 /GB ingest                                  | ~ 10 – 15         |
+| 2 × Private Endpoints (workload-side, on `*-api` + `*-web`)   | $0.01 / hr each                                   | ~ 15              |
+| AMPLS (Private Link Scope)                                    | free                                              | 0                 |
+| VNet, NSGs, UAMI, Event Grid system topic (storage events)    | free / negligible                                 | < 1               |
+| **Subtotal idle (workload RG, as deployed)**                  |                                                   | **≈ 170 – 180**   |
 
-Add LLM token cost on top: `gpt-4.1-mini` GlobalStandard is currently $0.40 / 1M input tokens and $1.60 / 1M output tokens.
+**Notes & exclusions**
+
+- **Customer hub costs are excluded.** In IVC managed-network mode the Private Endpoints and Private DNS zones for ACR, Cosmos, Blob, AMPLS, and the App Services' inbound path live in the customer hub, not in this workload RG. Add roughly **$0.01/hr per PE** (~$7.30/mo) and **$0.50/mo per Private DNS zone** for those, plus any ExpressRoute / VPN / Azure Firewall costs the hub already incurs.
+- **No Bastion / jumpbox** is provisioned by this template, so there is no Bastion line item (~$138/mo if you add Basic + Public IP separately).
+- **Foundry token consumption is on top.** `gpt-4.1-mini` `GlobalStandard` list price is **$0.40 / 1M input tokens** and **$1.60 / 1M output tokens** (May 2026). A single investment-analysis run is typically a few hundred K tokens; budget conservatively per analyst seat.
+- **Scaling levers** — moving ASP from `P0v3` → `P1v3` adds ~$80/mo per instance; ACR Premium is fixed (required for Private Link); Cosmos cost scales linearly with provisioned RU/s — switch to autoscale or serverless if RU usage is bursty.
+- The **§1 executive summary range of $170 – 200** corresponds to this subtotal plus ~5–10% headroom for transactional egress, App Insights spillover, and the Event Grid system topic that fires on blob events.
 
 ---
 
